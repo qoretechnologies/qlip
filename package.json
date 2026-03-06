@@ -31,6 +31,7 @@
     "test": "vitest run",
     "test:unit": "vitest --project unit",
     "test:stories": "vitest --project storybook",
+    "test:stories:clean": "rm -rf ./qlip && vitest --project storybook",
     "test:watch": "vitest",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
