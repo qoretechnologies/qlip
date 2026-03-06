@@ -35,3 +35,13 @@ export const LoggedIn: Story = {
     await screenshot(ctx, 'after-login');
   },
 };
+
+export const ElementWithFullHeight: Story = {
+  render: () => {
+    return (
+      <div style={{ height: '100%', backgroundColor: 'lightblue' }}>
+        <h1>This element should take the full height of the viewport</h1>
+      </div>
+    );
+  },
+};
