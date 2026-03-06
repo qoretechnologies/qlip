@@ -10,5 +10,5 @@ setProjectAnnotations([a11yAddonAnnotations, projectAnnotations]);
 // Storybook's portable stories create a plain <div> as canvasElement appended to <body>,
 // so we need html, body, and that container div to all have full height.
 const style = document.createElement('style');
-style.textContent = `html, body, body > div { width: 100%; height: 100%; margin: 0; padding: 0; }`;
+style.textContent = `html, body, body > div, #storybook-root { width: 100%; height: 100%; margin: 0; padding: 0; }`;
 document.head.appendChild(style);
