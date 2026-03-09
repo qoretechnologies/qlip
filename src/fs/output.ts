@@ -112,6 +112,53 @@ export const buildManualScreenshotPath = ({
   };
 };
 
+const buildLogKindDir = (kind: 'auto' | 'manual' | 'error') =>
+  joinPath('logs', kind);
+
+export const buildAutoLogPath = ({
+  buildDir,
+  storyId,
+  storyTitle,
+  storyName,
+}: {
+  buildDir: string;
+  storyId: string;
+  storyTitle?: string;
+  storyName?: string;
+}) => {
+  const baseName = buildStoryBaseName({ storyTitle, storyName, storyId });
+  const relativePath = `${buildLogKindDir('auto')}/${baseName}.json`;
+  return {
+    relativePath,
+    absolutePath: joinPath(buildDir, relativePath),
+  };
+};
+
+export const buildManualLogPath = ({
+  buildDir,
+  storyId,
+  storyTitle,
+  storyName,
+  screenshotName,
+}: {
+  buildDir: string;
+  storyId: string;
+  storyTitle?: string;
+  storyName?: string;
+  screenshotName: string;
+}) => {
+  const baseName = buildStoryBaseName({ storyTitle, storyName, storyId });
+  const safeName = sanitizeSegment(screenshotName);
+  const kind = safeName.startsWith(AUTO_ERROR_SCREENSHOT_BASE)
+    ? 'error'
+    : 'manual';
+  const relativePath = `${buildLogKindDir(kind)}/${baseName}--${safeName}.json`;
+  return {
+    relativePath,
+    absolutePath: joinPath(buildDir, relativePath),
+  };
+};
+
 export const createManifest = ({
   buildId,
   outputDir,

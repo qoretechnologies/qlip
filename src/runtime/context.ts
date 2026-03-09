@@ -1,4 +1,5 @@
 import {
+  QlipConsoleMessage,
   QlipManifest,
   QlipManifestEntry,
   QlipRuntimeConfig,
@@ -11,6 +12,7 @@ export interface QlipRuntimeState {
   counters: Map<string, number>;
   startedAt: number;
   warnedMissingStorybook: boolean;
+  consoleLogs: QlipConsoleMessage[];
 }
 
 const GLOBAL_KEY = '__QLIP_RUNTIME__';
@@ -67,6 +69,7 @@ export const initRuntimeState = (): QlipRuntimeState | null => {
     counters: new Map(),
     startedAt: Date.now(),
     warnedMissingStorybook: false,
+    consoleLogs: [],
   };
 
   const globalState = globalThis as {
@@ -103,4 +106,22 @@ export const updateStats = (state: QlipRuntimeState, updates: Partial<QlipManife
 
 export const markStorybookWarning = (state: QlipRuntimeState) => {
   state.warnedMissingStorybook = true;
+};
+
+export const pushConsoleLog = (
+  state: QlipRuntimeState,
+  log: QlipConsoleMessage,
+  maxLogs: number,
+) => {
+  if (state.consoleLogs.length < maxLogs) {
+    state.consoleLogs.push(log);
+  }
+};
+
+export const flushConsoleLogs = (
+  state: QlipRuntimeState,
+): QlipConsoleMessage[] => {
+  const logs = state.consoleLogs;
+  state.consoleLogs = [];
+  return logs;
 };

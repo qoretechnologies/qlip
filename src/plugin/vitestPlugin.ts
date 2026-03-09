@@ -47,6 +47,9 @@ export const qlipVitestPlugin = (
           auto: options.auto ?? true,
           manual: options.manual ?? true,
           error: options.error ?? true,
+          captureConsole: options.captureConsole ?? true,
+          captureConsoleLevels: options.captureConsoleLevels ?? ['error'],
+          maxConsoleLogs: options.maxConsoleLogs ?? 50,
         },
         tool: { name: TOOL_NAME, version },
       };
@@ -82,6 +85,9 @@ export const qlipVitestPlugin = (
       }
       await fs.mkdir(runtimeConfig.buildDir, { recursive: true });
       await fs.mkdir(path.join(runtimeConfig.buildDir, 'stories'), {
+        recursive: true,
+      });
+      await fs.mkdir(path.join(runtimeConfig.buildDir, 'logs'), {
         recursive: true,
       });
     },

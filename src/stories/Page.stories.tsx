@@ -45,3 +45,14 @@ export const ElementWithFullHeight: Story = {
     );
   },
 };
+
+export const WithConsoleError: Story = {
+  render: () => {
+    console.error('Test console error from story');
+    return (
+      <div>
+        <h1>This story emits a console error</h1>
+      </div>
+    );
+  },
+};

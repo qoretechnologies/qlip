@@ -1,4 +1,4 @@
-import { QlipParameters, QlipResolvedDefaults, QlipScreenshotOptions } from '../types.js';
+import { QlipConsoleLevel, QlipParameters, QlipResolvedDefaults, QlipScreenshotOptions } from '../types.js';
 
 export interface QlipResolvedOptions {
   skip: boolean;
@@ -11,6 +11,9 @@ export interface QlipResolvedOptions {
   auto: boolean;
   manual: boolean;
   error: boolean;
+  captureConsole: boolean;
+  captureConsoleLevels: QlipConsoleLevel[];
+  maxConsoleLogs: number;
 }
 
 export const resolveQlipOptions = ({
@@ -48,5 +51,17 @@ export const resolveQlipOptions = ({
     auto: override?.auto ?? story?.auto ?? defaults.auto,
     manual: override?.manual ?? story?.manual ?? defaults.manual,
     error: override?.error ?? story?.error ?? defaults.error,
+    captureConsole:
+      override?.captureConsole ??
+      story?.captureConsole ??
+      defaults.captureConsole,
+    captureConsoleLevels:
+      override?.captureConsoleLevels ??
+      story?.captureConsoleLevels ??
+      defaults.captureConsoleLevels,
+    maxConsoleLogs:
+      override?.maxConsoleLogs ??
+      story?.maxConsoleLogs ??
+      defaults.maxConsoleLogs,
   };
 };
