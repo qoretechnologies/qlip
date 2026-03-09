@@ -14,6 +14,7 @@ export interface QlipResolvedOptions {
   captureConsole: boolean;
   captureConsoleLevels: QlipConsoleLevel[];
   maxConsoleLogs: number;
+  consoleLogExcludePatterns: string[];
 }
 
 export const resolveQlipOptions = ({
@@ -63,5 +64,9 @@ export const resolveQlipOptions = ({
       override?.maxConsoleLogs ??
       story?.maxConsoleLogs ??
       defaults.maxConsoleLogs,
+    consoleLogExcludePatterns:
+      override?.consoleLogExcludePatterns ??
+      story?.consoleLogExcludePatterns ??
+      defaults.consoleLogExcludePatterns,
   };
 };

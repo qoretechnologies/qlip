@@ -50,6 +50,7 @@ export const qlipVitestPlugin = (
           captureConsole: options.captureConsole ?? true,
           captureConsoleLevels: options.captureConsoleLevels ?? ['error'],
           maxConsoleLogs: options.maxConsoleLogs ?? 50,
+          consoleLogExcludePatterns: options.consoleLogExcludePatterns ?? [],
         },
         tool: { name: TOOL_NAME, version },
       };

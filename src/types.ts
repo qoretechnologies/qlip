@@ -17,6 +17,7 @@ export interface QlipCaptureOptions {
   captureConsole?: boolean;
   captureConsoleLevels?: QlipConsoleLevel[];
   maxConsoleLogs?: number;
+  consoleLogExcludePatterns?: string[];
 }
 
 export interface QlipParameters extends QlipCaptureOptions {

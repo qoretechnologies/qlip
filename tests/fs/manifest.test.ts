@@ -22,6 +22,7 @@ describe('createManifest', () => {
         captureConsole: true,
         captureConsoleLevels: ['error'],
         maxConsoleLogs: 50,
+        consoleLogExcludePatterns: [],
       },
       tool: { name: 'qlip', version: '0.1.0' },
       createdAt: new Date('2025-01-02T03:04:05.000Z'),

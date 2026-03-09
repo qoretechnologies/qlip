@@ -20,6 +20,7 @@ describe('resolveQlipOptions', () => {
         captureConsole: true,
         captureConsoleLevels: ['error'],
         maxConsoleLogs: 50,
+        consoleLogExcludePatterns: [],
       },
       story: {
         skip: true,
@@ -35,6 +36,7 @@ describe('resolveQlipOptions', () => {
         captureConsole: false,
         captureConsoleLevels: ['warn'],
         maxConsoleLogs: 10,
+        consoleLogExcludePatterns: ['Warning:.*non-boolean'],
       },
       override: {
         skip: false,
@@ -50,6 +52,7 @@ describe('resolveQlipOptions', () => {
         captureConsole: true,
         captureConsoleLevels: ['error', 'warn'],
         maxConsoleLogs: 100,
+        consoleLogExcludePatterns: ['Deprecated'],
       },
     });
 
@@ -67,6 +70,7 @@ describe('resolveQlipOptions', () => {
       captureConsole: true,
       captureConsoleLevels: ['error', 'warn'],
       maxConsoleLogs: 100,
+      consoleLogExcludePatterns: ['Deprecated'],
     });
   });
 
@@ -88,6 +92,7 @@ describe('resolveQlipOptions', () => {
         captureConsole: true,
         captureConsoleLevels: ['error'],
         maxConsoleLogs: 50,
+        consoleLogExcludePatterns: [],
       },
       story: {
         skip: true,
@@ -103,6 +108,7 @@ describe('resolveQlipOptions', () => {
         captureConsole: false,
         captureConsoleLevels: ['warn'],
         maxConsoleLogs: 10,
+        consoleLogExcludePatterns: ['Warning:.*non-boolean'],
       },
     });
 
@@ -120,6 +126,7 @@ describe('resolveQlipOptions', () => {
       captureConsole: false,
       captureConsoleLevels: ['warn'],
       maxConsoleLogs: 10,
+      consoleLogExcludePatterns: ['Warning:.*non-boolean'],
     });
   });
 
@@ -141,6 +148,7 @@ describe('resolveQlipOptions', () => {
         captureConsole: true,
         captureConsoleLevels: ['error'],
         maxConsoleLogs: 50,
+        consoleLogExcludePatterns: [],
       },
     });
 
@@ -158,6 +166,7 @@ describe('resolveQlipOptions', () => {
       captureConsole: true,
       captureConsoleLevels: ['error'],
       maxConsoleLogs: 50,
+      consoleLogExcludePatterns: [],
     });
   });
 });
