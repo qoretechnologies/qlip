@@ -34,6 +34,15 @@ const installConsoleInterceptors = () => {
 
   const levels = state.config.defaults.captureConsoleLevels;
   const maxLogs = state.config.defaults.maxConsoleLogs;
+  const excludePatterns = state.config.defaults.consoleLogExcludePatterns
+    .map((pattern) => {
+      try {
+        return new RegExp(pattern);
+      } catch {
+        return null;
+      }
+    })
+    .filter((re): re is RegExp => re !== null);
 
   for (const level of levels) {
     const original = console[level];
@@ -45,6 +54,7 @@ const installConsoleInterceptors = () => {
 
       const message = args.map(serializeArg).join(' ');
       if (message.startsWith('[qlip]')) return;
+      if (excludePatterns.some((re) => re.test(message))) return;
 
       pushConsoleLog(
         currentState,

@@ -18,6 +18,7 @@ describe('nextStepName', () => {
           captureConsole: true,
           captureConsoleLevels: ['error'],
           maxConsoleLogs: 50,
+          consoleLogExcludePatterns: [],
         },
         tool: { name: 'qlip', version: '0.0.0' },
       },
@@ -36,6 +37,7 @@ describe('nextStepName', () => {
           captureConsole: true,
           captureConsoleLevels: ['error'],
           maxConsoleLogs: 50,
+          consoleLogExcludePatterns: [],
         },
         stats: {
           storiesTotal: 0,
