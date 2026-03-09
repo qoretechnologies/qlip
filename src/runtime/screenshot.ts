@@ -8,12 +8,15 @@ import {
 import { resolveQlipOptions } from '../config/parameters.js';
 import {
   AUTO_ERROR_SCREENSHOT_BASE,
+  buildAutoLogPath,
   buildAutoScreenshotPath,
+  buildManualLogPath,
   buildManualScreenshotPath,
   joinPath,
   sanitizeSegment,
 } from '../fs/output.js';
 import {
+  flushConsoleLogs,
   initRuntimeState,
   markStorybookWarning,
   nextStepName,
@@ -271,6 +274,7 @@ const buildEntry = ({
   status,
   error,
   timingsMs,
+  logsPath,
 }: {
   kind: QlipEntryKind;
   storyId: string;
@@ -282,6 +286,7 @@ const buildEntry = ({
   status: QlipEntryStatus;
   error: { message: string; stack?: string } | null;
   timingsMs: number;
+  logsPath?: string;
 }) => ({
   kind,
   storyId,
@@ -293,6 +298,7 @@ const buildEntry = ({
   status,
   error,
   timings: { ms: timingsMs },
+  ...(logsPath ? { logsPath } : {}),
 });
 
 const captureScreenshot = async ({
@@ -339,6 +345,7 @@ const captureScreenshot = async ({
   const captureStart = Date.now();
 
   if (resolved.skip) {
+    flushConsoleLogs(runtime);
     pushEntry(
       runtime,
       buildEntry({
@@ -431,6 +438,32 @@ const captureScreenshot = async ({
     }
   }
 
+  const flushed = flushConsoleLogs(runtime);
+  let logsPath: string | undefined;
+  if (resolved.captureConsole && flushed.length > 0) {
+    const logPathInfo =
+      kind === 'manual'
+        ? buildManualLogPath({
+            buildDir: runtime.config.buildDir,
+            storyId: story.id,
+            storyTitle: story.title,
+            storyName: story.name,
+            screenshotName: name,
+          })
+        : buildAutoLogPath({
+            buildDir: runtime.config.buildDir,
+            storyId: story.id,
+            storyTitle: story.title,
+            storyName: story.name,
+          });
+    logsPath = logPathInfo.relativePath;
+    await commands.writeFile(
+      logPathInfo.absolutePath,
+      JSON.stringify(flushed, null, 2),
+      'utf-8',
+    );
+  }
+
   const entry = buildEntry({
     kind,
     storyId: story.id,
@@ -442,6 +475,7 @@ const captureScreenshot = async ({
     status,
     error,
     timingsMs: Date.now() - captureStart,
+    logsPath,
   });
 
   pushEntry(runtime, entry);

@@ -17,6 +17,9 @@ describe('resolveQlipOptions', () => {
         auto: true,
         manual: true,
         error: true,
+        captureConsole: true,
+        captureConsoleLevels: ['error'],
+        maxConsoleLogs: 50,
       },
       story: {
         skip: true,
@@ -29,6 +32,9 @@ describe('resolveQlipOptions', () => {
         auto: false,
         manual: false,
         error: false,
+        captureConsole: false,
+        captureConsoleLevels: ['warn'],
+        maxConsoleLogs: 10,
       },
       override: {
         skip: false,
@@ -41,6 +47,9 @@ describe('resolveQlipOptions', () => {
         auto: true,
         manual: true,
         error: true,
+        captureConsole: true,
+        captureConsoleLevels: ['error', 'warn'],
+        maxConsoleLogs: 100,
       },
     });
 
@@ -55,6 +64,9 @@ describe('resolveQlipOptions', () => {
       auto: true,
       manual: true,
       error: true,
+      captureConsole: true,
+      captureConsoleLevels: ['error', 'warn'],
+      maxConsoleLogs: 100,
     });
   });
 
@@ -73,6 +85,9 @@ describe('resolveQlipOptions', () => {
         auto: true,
         manual: true,
         error: true,
+        captureConsole: true,
+        captureConsoleLevels: ['error'],
+        maxConsoleLogs: 50,
       },
       story: {
         skip: true,
@@ -85,6 +100,9 @@ describe('resolveQlipOptions', () => {
         auto: false,
         manual: false,
         error: false,
+        captureConsole: false,
+        captureConsoleLevels: ['warn'],
+        maxConsoleLogs: 10,
       },
     });
 
@@ -99,6 +117,9 @@ describe('resolveQlipOptions', () => {
       auto: false,
       manual: false,
       error: false,
+      captureConsole: false,
+      captureConsoleLevels: ['warn'],
+      maxConsoleLogs: 10,
     });
   });
 
@@ -117,6 +138,9 @@ describe('resolveQlipOptions', () => {
         auto: true,
         manual: true,
         error: true,
+        captureConsole: true,
+        captureConsoleLevels: ['error'],
+        maxConsoleLogs: 50,
       },
     });
 
@@ -131,6 +155,9 @@ describe('resolveQlipOptions', () => {
       auto: true,
       manual: true,
       error: true,
+      captureConsole: true,
+      captureConsoleLevels: ['error'],
+      maxConsoleLogs: 50,
     });
   });
 });

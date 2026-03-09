@@ -35,6 +35,9 @@ const runtimeConfig: QlipRuntimeConfig = {
     auto: true,
     manual: true,
     error: true,
+    captureConsole: true,
+    captureConsoleLevels: ['error'],
+    maxConsoleLogs: 50,
   },
   tool: { name: 'qlip', version: '0.1.0' },
 };

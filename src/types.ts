@@ -14,6 +14,9 @@ export interface QlipCaptureOptions {
   auto?: boolean;
   manual?: boolean;
   error?: boolean;
+  captureConsole?: boolean;
+  captureConsoleLevels?: QlipConsoleLevel[];
+  maxConsoleLogs?: number;
 }
 
 export interface QlipParameters extends QlipCaptureOptions {
@@ -50,6 +53,14 @@ export interface QlipStoryContext {
   parameters?: { qlip?: QlipParameters };
 }
 
+export type QlipConsoleLevel = 'error' | 'warn';
+
+export interface QlipConsoleMessage {
+  level: QlipConsoleLevel;
+  message: string;
+  timestamp: number;
+}
+
 export type QlipEntryKind = 'auto' | 'manual';
 export type QlipEntryStatus = 'captured' | 'skipped' | 'failed';
 
@@ -64,6 +75,7 @@ export interface QlipManifestEntry {
   status: QlipEntryStatus;
   error: { message: string; stack?: string } | null;
   timings: { ms: number };
+  logsPath?: string;
 }
 
 export interface QlipManifest {

@@ -15,6 +15,9 @@ describe('nextStepName', () => {
           disableAnimations: false,
           pauseAnimationsAtEnd: false,
           captureOnError: false,
+          captureConsole: true,
+          captureConsoleLevels: ['error'],
+          maxConsoleLogs: 50,
         },
         tool: { name: 'qlip', version: '0.0.0' },
       },
@@ -30,6 +33,9 @@ describe('nextStepName', () => {
           disableAnimations: false,
           pauseAnimationsAtEnd: false,
           captureOnError: false,
+          captureConsole: true,
+          captureConsoleLevels: ['error'],
+          maxConsoleLogs: 50,
         },
         stats: {
           storiesTotal: 0,
@@ -44,6 +50,7 @@ describe('nextStepName', () => {
       counters: new Map<string, number>(),
       startedAt: Date.now(),
       warnedMissingStorybook: false,
+      consoleLogs: [],
     };
 
     expect(nextStepName(state, 'story--one')).toBe('step-1');
