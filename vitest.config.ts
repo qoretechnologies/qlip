@@ -40,6 +40,17 @@ export default defineConfig({
           }),
           qlipVitestPlugin({
             outputDir: process.env.QLIP_OUTPUT_DIR,
+            // Enable upload when QLIP_UPLOAD_URL is set in the env.
+            // See design/UPLOAD.md.
+            ...(process.env.QLIP_UPLOAD_URL
+              ? {
+                  upload: {
+                    serverUrl: process.env.QLIP_UPLOAD_URL,
+                    uploadToken: process.env.QLIP_UPLOAD_TOKEN,
+                    project: process.env.QLIP_PROJECT ?? 'default',
+                  },
+                }
+              : {}),
           }),
         ],
         optimizeDeps: {

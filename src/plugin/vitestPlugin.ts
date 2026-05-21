@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Plugin } from 'vitest/config';
+import type { VitestPluginContext } from 'vitest/node';
 import pkg from '../../package.json' with { type: 'json' };
 import {
   DEFAULT_OUTPUT_DIR,
@@ -20,6 +21,10 @@ export const qlipVitestPlugin = (
 ): Plugin => {
   const buildId = options.buildId ?? generateBuildId();
   let runtimeConfig: QlipRuntimeConfig | null = null;
+  // Plugin instance state — `configureVitest` may fire once per project
+  // (vitest's storybook + unit projects both load us); only register
+  // the reporter the first time.
+  let reporterRegistered = false;
 
   return {
     name: 'qlip-vitest-plugin',
@@ -83,24 +88,53 @@ export const qlipVitestPlugin = (
           : [baseReporters]
         : ['default'];
 
-      if (options.upload && options.upload.disabled !== true) {
-        reportersList.push(
-          new QlipUploadReporter({
-            runtime: runtimeConfig,
-            upload: options.upload,
-          }),
-        );
-      }
-
       return {
         define: {
           __QLIP_CONFIG__: JSON.stringify(runtimeConfig),
         },
         test: {
           setupFiles: Array.from(setupFiles),
+          // NOTE: reporters are intentionally NOT set here. Project-level
+          // `test.reporters` arrays don't receive the global lifecycle
+          // events (onTestRunEnd etc.). The upload reporter is pushed
+          // onto the global `vitest.reporters` array via the
+          // `configureVitest` plugin hook below.
           reporters: reportersList,
         },
       };
+    },
+    /**
+     * Vitest-specific plugin hook (NOT a Vite hook). Runs after Vitest
+     * has resolved its config and created the Vitest instance — at which
+     * point we can push our reporter onto the live global reporters
+     * array, where lifecycle events (onTestRunEnd) actually fire.
+     *
+     * The plugin instance is shared across projects in a Vitest run, so
+     * configureVitest can fire multiple times (once per project that
+     * loads us). `reporterRegistered` deduplicates.
+     */
+    configureVitest(context: VitestPluginContext) {
+      if (reporterRegistered) return;
+      if (!runtimeConfig) return;
+      if (!options.upload || options.upload.disabled === true) return;
+
+      // Push onto `vitest.config.reporters` — NOT `vitest.reporters`.
+      // The runtime `vitest.reporters` array is built immediately
+      // after configureVitest by `createReporters(resolved.reporters,
+      // this)` (vitest's cli-api.js line ~12251), which replaces any
+      // direct mutation of the runtime array. The config array is
+      // what gets fed into that, so pushing here makes our reporter
+      // a first-class member of the resolved reporter set.
+      const cfg = context.vitest.config as unknown as {
+        reporters: unknown[];
+      };
+      cfg.reporters.push(
+        new QlipUploadReporter({
+          runtime: runtimeConfig,
+          upload: options.upload,
+        }),
+      );
+      reporterRegistered = true;
     },
     async configResolved() {
       if (!runtimeConfig) {

@@ -114,3 +114,4 @@ This file does **not** contain the detailed task list. Only the high-level outli
 
 1.  [x] Setup - Initial project setup with Vite, Vitest and TypeScript. See .tasks/SETUP.md
 2.  [x] qlip → qlip-server upload integration (Phase 8) - QlipUploadOptions on the plugin, multipart upload after tests via a QlipUploadReporter, $GITHUB_*/git auto-detection for branch+commit, design/UPLOAD.md documents the cross-repo contract.
+3.  [x] Phase 9 verification - configureVitest-based reporter registration (the project-level test.reporters config gets dropped when Vitest reassigns vitest.reporters from createReporters; pushing to vitest.config.reporters in configureVitest works correctly). vitest.config.ts reads QLIP_UPLOAD_URL/PROJECT/TOKEN from env so demo runs need no code change.
