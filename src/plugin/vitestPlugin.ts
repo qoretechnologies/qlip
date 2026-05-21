@@ -11,6 +11,7 @@ import {
   generateBuildId,
 } from '../fs/output.js';
 import { QlipPluginOptions, QlipRuntimeConfig } from '../types.js';
+import { QlipUploadReporter } from '../upload/reporter.js';
 
 const normalizePath = (value: string) => value.replace(/\\/g, '/');
 
@@ -71,12 +72,33 @@ export const qlipVitestPlugin = (
       }
       setupFiles.add(setupFile);
 
+      // Wire the upload reporter into Vitest when upload is configured.
+      // We add ourselves alongside the user's reporters rather than
+      // replacing them. When no reporter is set, Vitest's default is
+      // implicit — re-add 'default' so we don't accidentally silence it.
+      const baseReporters = config.test?.reporters;
+      const reportersList = baseReporters
+        ? Array.isArray(baseReporters)
+          ? [...baseReporters]
+          : [baseReporters]
+        : ['default'];
+
+      if (options.upload && options.upload.disabled !== true) {
+        reportersList.push(
+          new QlipUploadReporter({
+            runtime: runtimeConfig,
+            upload: options.upload,
+          }),
+        );
+      }
+
       return {
         define: {
           __QLIP_CONFIG__: JSON.stringify(runtimeConfig),
         },
         test: {
           setupFiles: Array.from(setupFiles),
+          reporters: reportersList,
         },
       };
     },

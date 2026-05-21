@@ -24,10 +24,49 @@ export interface QlipParameters extends QlipCaptureOptions {
   captureOnError?: boolean;
 }
 
+/**
+ * Options for uploading a finished build to a qlip-server instance.
+ * See `design/UPLOAD.md` for the protocol details.
+ */
+export interface QlipUploadOptions {
+  /** Base URL of the qlip-server (e.g. "http://localhost:3100"). */
+  serverUrl: string;
+  /**
+   * Bearer token, required by the server when UPLOAD_TOKEN is set.
+   * Omit for unauthenticated dev servers.
+   */
+  uploadToken?: string;
+  /** Project name to upload under. Defaults to "default". */
+  project?: string;
+  /**
+   * Git branch. Auto-detected from $GITHUB_HEAD_REF, $GITHUB_REF_NAME,
+   * or `git rev-parse --abbrev-ref HEAD` when omitted.
+   */
+  branch?: string;
+  /**
+   * Git commit SHA. Auto-detected from $GITHUB_SHA or
+   * `git rev-parse HEAD` when omitted.
+   */
+  commit?: string;
+  /** Skip upload entirely (handy for local-only runs). */
+  disabled?: boolean;
+  /**
+   * Whether an upload failure should fail the test run.
+   * Default: `false` — the run succeeds and the failure is logged.
+   * Set to `true` in CI when you want red builds on upload errors.
+   */
+  failOnUploadError?: boolean;
+}
+
 export interface QlipPluginOptions extends QlipCaptureOptions {
   outputDir?: string;
   buildId?: string;
   captureOnError?: boolean;
+  /**
+   * Upload the finished build to a qlip-server. When unset, no upload
+   * happens — the screenshots stay on local disk.
+   */
+  upload?: QlipUploadOptions;
 }
 
 export type QlipResolvedDefaults = Required<QlipCaptureOptions> & {

@@ -113,3 +113,4 @@ Installing older versions “by habit” or for convenience is not acceptable.
 This file does **not** contain the detailed task list. Only the high-level outline is described here. When a task is done, check it off below.
 
 1.  [x] Setup - Initial project setup with Vite, Vitest and TypeScript. See .tasks/SETUP.md
+2.  [x] qlip → qlip-server upload integration (Phase 8) - QlipUploadOptions on the plugin, multipart upload after tests via a QlipUploadReporter, $GITHUB_*/git auto-detection for branch+commit, design/UPLOAD.md documents the cross-repo contract.

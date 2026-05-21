@@ -17,9 +17,11 @@ hasn't been written yet, not that it's been ruled out.
   parameters → plugin defaults), the full option matrix, and the
   precedence rules.
 - **MANIFEST.md** — the manifest schema this tool emits, including
-  the JSON shape, file layout, and the contract it forms with
-  `qlip-server`. **Important: this doc is the cross-repo contract**
-  between qlip and qlip-server; keep it in sync with
+  the JSON shape and file layout.
+- **UPLOAD.md** ✓ — the qlip-side of the cross-repo upload contract
+  with qlip-server. Multipart wire format, the field-name encoding
+  for screenshot paths, branch/commit auto-detection, and a
+  how-to-extend section. Keep in sync with
   `qlip-server/design/UPLOAD.md`.
 
 ## Conventions
