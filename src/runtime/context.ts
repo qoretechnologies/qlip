@@ -13,6 +13,16 @@ export interface QlipRuntimeState {
   startedAt: number;
   warnedMissingStorybook: boolean;
   consoleLogs: QlipConsoleMessage[];
+  /**
+   * Unique-per-browser-context identifier used as the fragment
+   * filename when writing this context's manifest to
+   * `<buildDir>/manifest-fragments/`. Each `*.stories.tsx` runs in
+   * its own browser context with its own QlipRuntimeState (initialized
+   * here); without a per-context fragment, contexts would overwrite
+   * each other's writes to a shared `manifest.json`. See
+   * `src/upload/manifest.ts` for the Node-side merge.
+   */
+  fragmentId: string;
 }
 
 const GLOBAL_KEY = '__QLIP_RUNTIME__';
@@ -63,6 +73,15 @@ export const initRuntimeState = (): QlipRuntimeState | null => {
     tool: runtimeConfig.tool,
   });
 
+  // Fragment ID needs to be unique per browser context, not unique per
+  // build. Stamp time + random suffix is plenty (each context is its
+  // own process / module graph, so two contexts can't race here).
+  // Math.random() alone would collide ~1 in 16M; with the millis
+  // prefix that risk is gone.
+  const fragmentId = `${Date.now().toString(36)}-${Math.random()
+    .toString(36)
+    .slice(2, 10)}`;
+
   const runtime: QlipRuntimeState = {
     config: runtimeConfig,
     manifest,
@@ -70,6 +89,7 @@ export const initRuntimeState = (): QlipRuntimeState | null => {
     startedAt: Date.now(),
     warnedMissingStorybook: false,
     consoleLogs: [],
+    fragmentId,
   };
 
   const globalState = globalThis as {

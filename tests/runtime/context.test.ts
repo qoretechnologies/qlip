@@ -53,6 +53,7 @@ describe('nextStepName', () => {
       startedAt: Date.now(),
       warnedMissingStorybook: false,
       consoleLogs: [],
+      fragmentId: 'frag-test',
     };
 
     expect(nextStepName(state, 'story--one')).toBe('step-1');

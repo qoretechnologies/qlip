@@ -40,6 +40,10 @@
     "precheck": "npm run lint && npm run typecheck && npm run test -- --project unit"
   },
   "dependencies": {},
+  "peerDependencies": {
+    "vite": "^5.0.0 || ^6.0.0 || ^7.0.0",
+    "vitest": "^4.0.0"
+  },
   "devDependencies": {
     "@types/node": "^20.10.0",
     "@typescript-eslint/eslint-plugin": "^6.10.0",

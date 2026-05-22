@@ -8,6 +8,7 @@ import pkg from '../../package.json' with { type: 'json' };
 import {
   DEFAULT_OUTPUT_DIR,
   DEFAULT_VIEWPORT,
+  MANIFEST_FRAGMENT_DIR,
   TOOL_NAME,
   generateBuildId,
 } from '../fs/output.js';
@@ -89,6 +90,18 @@ export const qlipVitestPlugin = (
         : ['default'];
 
       return {
+        // Vitest browser mode's `commands.writeFile` enforces vite's
+        // `server.fs.allow` allowlist before writing. When the output
+        // dir lives outside the project root (e.g. a test tmpdir, or
+        // a CI artifact path), the write is denied with "Access
+        // denied". Add the output dir to the allowlist so per-context
+        // manifest fragments + (incidentally) per-story PNGs can be
+        // written from inside the browser.
+        server: {
+          fs: {
+            allow: [resolvedOutputDir],
+          },
+        },
         define: {
           __QLIP_CONFIG__: JSON.stringify(runtimeConfig),
         },
@@ -105,18 +118,24 @@ export const qlipVitestPlugin = (
     },
     /**
      * Vitest-specific plugin hook (NOT a Vite hook). Runs after Vitest
-     * has resolved its config and created the Vitest instance — at which
-     * point we can push our reporter onto the live global reporters
-     * array, where lifecycle events (onTestRunEnd) actually fire.
+     * has resolved its config and created the Vitest instance — at
+     * which point we can push our reporter onto the live global
+     * reporters array, where lifecycle events (onTestRunEnd) actually
+     * fire.
      *
-     * The plugin instance is shared across projects in a Vitest run, so
-     * configureVitest can fire multiple times (once per project that
-     * loads us). `reporterRegistered` deduplicates.
+     * The plugin instance is shared across projects in a Vitest run,
+     * so configureVitest can fire multiple times (once per project
+     * that loads us). `reporterRegistered` deduplicates.
+     *
+     * The reporter is registered **unconditionally** — it always
+     * merges per-browser-context manifest fragments into the canonical
+     * `manifest.json` (see `src/upload/manifest.ts`). The upload step
+     * inside the reporter no-ops when `options.upload` is absent, so
+     * local-only users still get their `manifest.json` written.
      */
     configureVitest(context: VitestPluginContext) {
       if (reporterRegistered) return;
       if (!runtimeConfig) return;
-      if (!options.upload || options.upload.disabled === true) return;
 
       // Push onto `vitest.config.reporters` — NOT `vitest.reporters`.
       // The runtime `vitest.reporters` array is built immediately
@@ -131,7 +150,9 @@ export const qlipVitestPlugin = (
       cfg.reporters.push(
         new QlipUploadReporter({
           runtime: runtimeConfig,
-          upload: options.upload,
+          ...(options.upload !== undefined
+            ? { upload: options.upload }
+            : {}),
         }),
       );
       reporterRegistered = true;
@@ -145,6 +166,12 @@ export const qlipVitestPlugin = (
         recursive: true,
       });
       await fs.mkdir(path.join(runtimeConfig.buildDir, 'logs'), {
+        recursive: true,
+      });
+      // Fragments dir must exist before any browser context tries to
+      // write into it — the browser-side `commands.writeFile` doesn't
+      // do `mkdir -p`.
+      await fs.mkdir(path.join(runtimeConfig.buildDir, MANIFEST_FRAGMENT_DIR), {
         recursive: true,
       });
     },

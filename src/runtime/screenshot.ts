@@ -8,6 +8,7 @@ import {
 import { resolveQlipOptions } from '../config/parameters.js';
 import {
   AUTO_ERROR_SCREENSHOT_BASE,
+  MANIFEST_FRAGMENT_DIR,
   buildAutoLogPath,
   buildAutoScreenshotPath,
   buildManualLogPath,
@@ -25,6 +26,39 @@ import {
 } from './context.js';
 import type { TestContext } from 'vitest';
 import type { QlipParameters, QlipManifestEntry } from '../types.js';
+
+/**
+ * Each browser context writes its in-memory manifest to a unique
+ * fragment file under `<buildDir>/manifest-fragments/<fragmentId>.json`.
+ * The Node-side `mergeManifestFragments` (in `src/upload/manifest.ts`)
+ * consolidates all fragments into the final `manifest.json` once Vitest
+ * signals end-of-run. Writing the full manifest each time is fine —
+ * fragments are tiny JSON and there's only one writer per file.
+ *
+ * Background: vitest browser-mode runs each `*.stories.tsx` in its
+ * own browser context with its own module graph and its own
+ * QlipRuntimeState. If they all wrote to a shared `manifest.json` the
+ * writes would clobber each other — last test file wins, earlier
+ * files' entries get stranded on disk.
+ */
+type WriteFileCommand = (
+  path: string,
+  data: string,
+  encoding: 'utf-8',
+) => Promise<unknown>;
+
+const writeManifestFragment = async (
+  commands: { writeFile: WriteFileCommand },
+  buildDir: string,
+  fragmentId: string,
+  manifest: unknown,
+): Promise<void> => {
+  await commands.writeFile(
+    joinPath(buildDir, MANIFEST_FRAGMENT_DIR, `${fragmentId}.json`),
+    JSON.stringify(manifest, null, 2),
+    'utf-8',
+  );
+};
 
 const ensureBrowserContext = async () => {
   if (!globalThis.__vitest_browser__) {
@@ -382,10 +416,11 @@ const captureScreenshot = async ({
           : runtime.manifest.stats.storiesTotal,
       skipped: runtime.manifest.stats.skipped + 1,
     });
-    await commands.writeFile(
-      joinPath(runtime.config.buildDir, 'manifest.json'),
-      JSON.stringify(runtime.manifest, null, 2),
-      'utf-8',
+    await writeManifestFragment(
+      commands,
+      runtime.config.buildDir,
+      runtime.fragmentId,
+      runtime.manifest,
     );
     return;
   }
@@ -504,10 +539,11 @@ const captureScreenshot = async ({
     });
   }
 
-  await commands.writeFile(
-    joinPath(runtime.config.buildDir, 'manifest.json'),
-    JSON.stringify(runtime.manifest, null, 2),
-    'utf-8',
+  await writeManifestFragment(
+    commands,
+    runtime.config.buildDir,
+    runtime.fragmentId,
+    runtime.manifest,
   );
 };
 
