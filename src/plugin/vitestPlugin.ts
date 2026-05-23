@@ -14,6 +14,7 @@ import {
 } from '../fs/output.js';
 import { QlipPluginOptions, QlipRuntimeConfig } from '../types.js';
 import { QlipUploadReporter } from '../upload/reporter.js';
+import { stashFinalizeConfig } from '../runtime/global-setup.js';
 
 const normalizePath = (value: string) => value.replace(/\\/g, '/');
 
@@ -83,11 +84,104 @@ export const qlipVitestPlugin = (
       // replacing them. When no reporter is set, Vitest's default is
       // implicit — re-add 'default' so we don't accidentally silence it.
       const baseReporters = config.test?.reporters;
-      const reportersList = baseReporters
-        ? Array.isArray(baseReporters)
-          ? [...baseReporters]
-          : [baseReporters]
-        : ['default'];
+      // Vitest's `test.reporters` accepts a narrow union of string
+      // names + `[name, options]` tuples + Reporter instances. Our
+      // pushed `QlipUploadReporter` is duck-typed (it doesn't
+      // `implements Reporter` so we can stay compat across V2/V4
+      // interface drift). Casting through `Reporter[]` keeps the
+      // returned config compatible with Vitest's expected shape.
+      const reportersList = (
+        baseReporters
+          ? Array.isArray(baseReporters)
+            ? [...baseReporters]
+            : [baseReporters]
+          : ['default']
+      ) as import('vitest/reporters').Reporter[];
+
+      // 2026-05-23 — Vitest 2 compat. The `configureVitest` plugin
+      // hook below was added in Vitest 3.1.0-beta.2 and is what we
+      // rely on in Vitest 4 to push our reporter onto the *global*
+      // reporters array (which gets reset by `createReporters` if
+      // we push only in this `config` hook).
+      //
+      // On Vitest 2.x — used by qorus-ide and many Storybook 8.5
+      // consumers — `configureVitest` doesn't exist and is silently
+      // ignored. Without a fallback, the reporter never fires there:
+      // captures land on disk, the manifest is never merged, the
+      // upload never happens.
+      //
+      // The fix is to ALSO push a reporter instance directly here.
+      // Verified by reading both Vitest 2.1 and 4.x dist:
+      // `createReporters` returns pre-instantiated `Reporter`
+      // instances as-is (V2.1 cli-api.js:5186, V4 cli-api.js:10611),
+      // so this push survives in both. The reporter itself
+      // implements both `onFinished` (V2 name) and `onTestRunEnd`
+      // (V3+ name) and dedupes via an internal flag.
+      //
+      // On Vitest 4: this push survives → `onTestRunEnd` fires →
+      // `finalize()` runs. The `configureVitest` push below is now
+      // a no-op (dedup flag), kept only as a safety net for any
+      // future Vitest variant that strips instances during
+      // `createReporters`.
+      //
+      // On Vitest 2: this push is the only one → `onFinished` fires
+      // → `finalize()` runs. `configureVitest` is never called.
+      //
+      // See `.tasks/VITEST_2_COMPAT.md` for the full investigation.
+      const eagerReporter = new QlipUploadReporter({
+        runtime: runtimeConfig,
+        ...(options.upload !== undefined ? { upload: options.upload } : {}),
+      });
+      // Duck-typed cast: QlipUploadReporter doesn't `implements
+      // Reporter` (so we can stay compat across V2/V4 interface
+      // drift), but Vitest's runtime only looks for `onFinished` /
+      // `onTestRunEnd` methods, both of which our class provides.
+      reportersList.push(
+        eagerReporter as unknown as import('vitest/reporters').Reporter,
+      );
+
+      // 2026-05-23 — Vitest 2 workspace-mode fallback. When the
+      // plugin is mounted inside a workspace project (e.g.
+      // qorus-ide's `vitest.workspace.ts`), the reporter push above
+      // lands in the project's local config — but Vitest's
+      // end-of-run lifecycle fires only on the **root** reporter
+      // array (`this.reporters = await createReporters(resolved.reporters, ...)`
+      // — V2.1 cli-api.js:10494). The project-local reporter is
+      // never called.
+      //
+      // `globalSetup`, however, does fire per-project: each project
+      // gets setup before its tests and teardown after. We append
+      // our globalSetup file to `test.globalSetup`, which writes
+      // `manifest.json` + uploads from teardown. The runtime config
+      // is stashed on `globalThis` (same Node process) so the
+      // globalSetup file can pick it up at teardown time without
+      // re-reading config files.
+      //
+      // On V4 single-project: reporter fires first, finalize runs,
+      // globalSetup teardown is a no-op (dedup flag). On V2
+      // workspace: reporter is lifecycle-dead, globalSetup teardown
+      // fires, finalize runs. Both paths converge on `finalizeBuild`.
+      stashFinalizeConfig({
+        runtime: runtimeConfig,
+        ...(options.upload !== undefined ? { upload: options.upload } : {}),
+      });
+      const globalSetupTs = fileURLToPath(
+        new URL('../runtime/global-setup.ts', import.meta.url),
+      );
+      const globalSetupJs = fileURLToPath(
+        new URL('../runtime/global-setup.js', import.meta.url),
+      );
+      const globalSetupFile = existsSync(globalSetupTs)
+        ? globalSetupTs
+        : globalSetupJs;
+      const existingGlobalSetup = config.test?.globalSetup;
+      const globalSetupFiles = new Set<string>();
+      if (typeof existingGlobalSetup === 'string') {
+        globalSetupFiles.add(existingGlobalSetup);
+      } else if (Array.isArray(existingGlobalSetup)) {
+        existingGlobalSetup.forEach((file) => globalSetupFiles.add(file));
+      }
+      globalSetupFiles.add(globalSetupFile);
 
       return {
         // Vitest browser mode's `commands.writeFile` enforces vite's
@@ -107,11 +201,7 @@ export const qlipVitestPlugin = (
         },
         test: {
           setupFiles: Array.from(setupFiles),
-          // NOTE: reporters are intentionally NOT set here. Project-level
-          // `test.reporters` arrays don't receive the global lifecycle
-          // events (onTestRunEnd etc.). The upload reporter is pushed
-          // onto the global `vitest.reporters` array via the
-          // `configureVitest` plugin hook below.
+          globalSetup: Array.from(globalSetupFiles),
           reporters: reportersList,
         },
       };
