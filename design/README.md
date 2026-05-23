@@ -23,6 +23,13 @@ hasn't been written yet, not that it's been ruled out.
   for screenshot paths, branch/commit auto-detection, and a
   how-to-extend section. Keep in sync with
   `qlip-server/design/UPLOAD.md`.
+- **RUNNER.md** ✓ (design only — implementation tracked in
+  `../.tasks/STANDALONE_RUNNER.md`) — second capture path built on
+  `@storybook/test-runner` so qlip is no longer coupled to the
+  consumer's Vitest version. Sits alongside the existing Vitest
+  plugin; same manifest, same upload, same review UI. Architecture
+  diagram, code-reuse table, capture lifecycle, CLI surface,
+  effort estimate, and how-to-extend section all in the doc.
 
 ## Conventions
 
