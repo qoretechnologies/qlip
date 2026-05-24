@@ -489,14 +489,29 @@ doesn't exist today). The single-host orchestrator avoids it.
 
 ### Failure semantics
 
-Stop-on-first-failure, matching `vitest --shard`. The failing
-shard's exit code becomes the orchestrator's
+**Default — stop on first failure.** Matches `vitest --shard`. The
+failing shard's exit code becomes the orchestrator's
 `testRunnerExitCode`. Any shards that completed before the
 failure still flushed their fragments to disk — the post-loop
 upload picks them up so the user can review the partial build
 on the dashboard. The build is "incomplete" but recoverable;
 re-running the orchestrator (with the same `QLIP_BUILD_ID` if
 desired) re-attempts the failed + remaining shards.
+
+**Opt-in — `--continue-on-failure`.** For visual-regression demos
+and any "I want to see all the screenshots regardless of which
+play functions failed" workflow. A shard exit code of 1 says
+"some play function asserted false" — the SCREENSHOT for that
+story still got captured, and the dashboard is where we want to
+*see* the regression. Stopping at shard 1 just because story 27
+of 158 failed an assertion loses coverage on the other 7 shards.
+
+When the flag is set, each failing shard logs `… — continuing`
+(vs `… — stopping`), the loop visits every shard, and the
+orchestrator's final exit code is the LAST non-zero shard exit
+(matching the "any failure → non-zero" CI convention). The
+`shardsFailed: number[]` field on the result enumerates the
+1-based indices that exited non-zero.
 
 ### Memory model
 
