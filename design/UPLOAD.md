@@ -92,6 +92,31 @@ for matching.
 
 ---
 
+## Manifest entry kinds
+
+Every `entries[]` row carries a discriminating `kind`. The contract
+between qlip (producer) and qlip-server (consumer) requires the
+server to accept all three:
+
+| `kind` | Origin | Server treatment |
+|---|---|---|
+| `auto` | After-each post-render snapshot taken once per story. | Stored as `kind: 'snapshot'`. Goes through the baseline + diff pipeline. |
+| `manual` | An explicit `screenshot()` call inside a play function. | Stored as `kind: 'interaction'`. Goes through baseline + diff. |
+| `error` | Screenshot captured at the moment a story's play function **failed**. Triggered automatically from the runtime's `afterEach` when `captureOnError` is enabled and `task.result?.state === 'fail'`. **Always paired with a populated `error.message`** (pulled from `task.result.errors[0]`). | Stored as `kind: 'error'`. **Skips** baseline lookup + diff (there is no "expected" image to compare against). Surfaced in the dashboard's dedicated "Failures" section; review (accept/deny) is disallowed (the server returns 400 on attempts). |
+
+The path for an `error` entry lives under the `error/` subtree
+(routed by the `qlip-auto-error-capture*` filename prefix in
+`src/fs/output.ts`). The wire format is identical — same multipart
+field-name encoding, same PNG payload.
+
+Stat impact: error captures bump `stats.failed` only — they do not
+bump `stats.storiesTotal` (the matching auto entry already counted
+that story) and do not count as `capturedAuto` or `capturedManual`.
+
+<!-- Decision: see PROGRESS.md 2026-05-24 — Error-capture end-to-end -->
+
+---
+
 ## Response shape
 
 On success (`201`):
