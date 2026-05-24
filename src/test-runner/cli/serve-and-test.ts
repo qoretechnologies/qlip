@@ -73,6 +73,22 @@ interface IParsedArgs {
   failOnUploadError: boolean;
   testRunnerArgs: string[];
   help: boolean;
+  /**
+   * Number of test-storybook shards to run sequentially. `1` (the
+   * default) is the historical single-process behavior. Higher
+   * values loop test-storybook N times, each in its own subprocess
+   * (so Node module-cache memory resets between shards), each
+   * passing `--shard k/N` to test-storybook. All shards share the
+   * pinned QLIP_BUILD_ID so they write manifest fragments into the
+   * same buildDir; the single post-loop upload aggregates them.
+   *
+   * Why an orchestrator-level loop instead of consumer's CI matrix:
+   * for local dev / a single-host CI runner, this is the only way
+   * to land all N shards as ONE build in the dashboard (each
+   * matrix-cell upload would otherwise hit DUPLICATE_BUILD on the
+   * second shard).
+   */
+  shards: number;
 }
 
 const USAGE = `qlip-serve-and-test — orchestrate storybook static → test-storybook → upload
@@ -95,6 +111,16 @@ Options:
   --no-upload                   Skip qlip-upload entirely.
   --fail-on-upload-error        Forward to qlip-upload — exit non-zero
                                 on upload failure.
+  --shards <n>                  Run test-storybook N times sequentially
+                                with --shard k/N appended. Each shard
+                                is a fresh subprocess (Node module
+                                cache resets between shards, so memory
+                                doesn't accumulate). All shards share
+                                the pinned QLIP_BUILD_ID and merge
+                                into ONE build at upload time.
+                                Default: 1 (no sharding).
+                                Mutually exclusive with passing
+                                --shard k/N after \`--\`.
   -h, --help                    Show this help.
 
 Env vars (passed through to test-storybook + qlip-upload):
@@ -117,6 +143,7 @@ const parseArgs = (argv: string[]): IParsedArgs => {
     failOnUploadError: false,
     testRunnerArgs: [],
     help: false,
+    shards: 1,
   };
   let passThrough = false;
   for (let i = 0; i < argv.length; i += 1) {
@@ -158,12 +185,32 @@ const parseArgs = (argv: string[]): IParsedArgs => {
       case '--fail-on-upload-error':
         args.failOnUploadError = true;
         break;
+      case '--shards': {
+        const raw = next();
+        const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+        if (!Number.isInteger(parsed) || parsed < 1) {
+          throw new Error(
+            `Invalid --shards value: ${raw ?? '(missing)'} (must be a positive integer)`,
+          );
+        }
+        args.shards = parsed;
+        break;
+      }
       default:
         if (arg.startsWith('-')) {
           throw new Error(`Unknown option: ${arg}`);
         }
       // ignore bare positionals (reserved for future use)
     }
+  }
+  // Validate cross-flag invariants AFTER all args are collected so
+  // the order user passed them doesn't change the message.
+  if (args.shards > 1 && args.testRunnerArgs.includes('--shard')) {
+    throw new Error(
+      '--shards <n> is mutually exclusive with passing --shard k/N after `--`. ' +
+        'The orchestrator owns the --shard flag when --shards is set; ' +
+        'drop your manual --shard arg or remove --shards.',
+    );
   }
   return args;
 };
@@ -209,6 +256,14 @@ export interface IRunServeAndTestResult {
   url?: string;
   /** Test-storybook's exit code, even when upload changed the final code. */
   testRunnerExitCode?: number;
+  /**
+   * How many shards finished with exit 0. For the single-shard path
+   * this is 0 (if test-storybook failed) or 1 (success). For
+   * `--shards N`, this is the index of the last successful shard
+   * (so `N` means all passed; `K < N` means K passed and K+1 was
+   * the one that failed).
+   */
+  shardsCompleted?: number;
 }
 
 /**
@@ -315,16 +370,69 @@ export const runServeAndTest = async (
   process.on('SIGTERM', onSignal);
 
   let testRunnerExitCode = 0;
+  let shardsCompleted = 0;
   try {
-    const { promise, child } = runTestStorybook(
-      url,
-      parsed.testRunnerArgs,
-      logger,
-      spawnFn,
-      childEnv,
-    );
-    testRunnerChild = child;
-    testRunnerExitCode = await promise;
+    // Single-shard fast path: no per-iteration log noise, no --shard
+    // arg passed at all. Behaviour is byte-identical to the
+    // pre-multi-shard implementation.
+    if (parsed.shards === 1) {
+      const { promise, child } = runTestStorybook(
+        url,
+        parsed.testRunnerArgs,
+        logger,
+        spawnFn,
+        childEnv,
+      );
+      testRunnerChild = child;
+      testRunnerExitCode = await promise;
+      if (testRunnerExitCode === 0) shardsCompleted = 1;
+    } else {
+      // Multi-shard path: spawn sequentially. Each child gets a
+      // unique `--shard k/N` appended to its args. They all share
+      // childEnv (so QLIP_BUILD_ID is identical) — the writes land
+      // under one buildDir and the post-loop upload merges every
+      // fragment into one build.
+      //
+      // Stop-on-first-failure: matches `vitest --shard` semantics
+      // and what most users expect from a CI orchestrator. Any
+      // shards that DID complete still contributed fragments to
+      // disk; the upload step (further below) picks them up so the
+      // user can review the partial build on the dashboard.
+      logger.log(
+        `[qlip] running ${String(parsed.shards)} shards sequentially (buildId=${runBuildId})`,
+      );
+      for (let k = 1; k <= parsed.shards; k += 1) {
+        logger.log(
+          `[qlip] shard ${String(k)}/${String(parsed.shards)} starting`,
+        );
+        const shardArgs = [
+          ...parsed.testRunnerArgs,
+          '--shard',
+          `${String(k)}/${String(parsed.shards)}`,
+        ];
+        const { promise, child } = runTestStorybook(
+          url,
+          shardArgs,
+          logger,
+          spawnFn,
+          childEnv,
+        );
+        testRunnerChild = child;
+        // eslint-disable-next-line no-await-in-loop -- intentional: sequential by design (memory reset between shards)
+        const shardExitCode = await promise;
+        if (shardExitCode !== 0) {
+          logger.error(
+            `[qlip] shard ${String(k)}/${String(parsed.shards)} exited ${String(shardExitCode)} — stopping`,
+          );
+          testRunnerExitCode = shardExitCode;
+          break;
+        }
+        logger.log(
+          `[qlip] shard ${String(k)}/${String(parsed.shards)} ok`,
+        );
+        shardsCompleted = k;
+      }
+    }
   } catch (err) {
     logger.error(`qlip-serve-and-test: ${(err as Error).message}`);
     return {
@@ -355,7 +463,12 @@ export const runServeAndTest = async (
     if (parsed.upload === 'auto') {
       logger.log('[qlip] skipping upload (QLIP_UPLOAD_URL not set)');
     }
-    return { exitCode: testRunnerExitCode, url, testRunnerExitCode };
+    return {
+      exitCode: testRunnerExitCode,
+      url,
+      testRunnerExitCode,
+      shardsCompleted,
+    };
   }
 
   logger.log('[qlip] running qlip-upload...');
@@ -375,7 +488,7 @@ export const runServeAndTest = async (
     exitCode = uploadResult.exitCode;
   }
 
-  return { exitCode, url, testRunnerExitCode };
+  return { exitCode, url, testRunnerExitCode, shardsCompleted };
 };
 
 // NOTE: bin entry lives at `./serve-and-test-bin.ts`. See

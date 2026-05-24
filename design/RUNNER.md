@@ -442,3 +442,79 @@ When you add a new feature to the runner, follow this order:
    they cut a matching release.
 4. Add a smoke test fixture per supported major to lock the matrix.
 5. Document the support range in the package README.
+
+---
+
+## Multi-shard orchestration (`--shards N`)
+
+<!-- Decision: see PROGRESS.md 2026-05-24 — Multi-shard orchestration -->
+
+The shipped CLI is `qlip-serve-and-test`, not the original
+`qlip-runner` sketch above. As of 2026-05-24 it supports running
+N shards sequentially from a single invocation:
+
+```bash
+qlip-serve-and-test --shards 8
+```
+
+### What it does
+
+1. Pin a single `QLIP_BUILD_ID` for the run (auto-generated if
+   not set in env).
+2. Loop k = 1..N. Each iteration spawns `test-storybook --url
+   <served-url> --shard k/N` as a fresh subprocess.
+3. Each subprocess inherits the same childEnv → same
+   `QLIP_BUILD_ID` → writes its manifest fragment into the same
+   `<outputDir>/<buildId>/manifest-fragments/` directory.
+4. After all N shards complete (or one fails), run
+   `qlip-upload` **once**. The fragment merger
+   (`src/upload/manifest.ts:mergeManifestFragments`) reads every
+   fragment in the buildDir and produces ONE multipart upload
+   to qlip-server → ONE build in the dashboard.
+
+### Why this isn't "the CI matrix's job"
+
+CI matrix sharding (GitHub Actions strategy.matrix, etc.) gives
+you one build *per shard* in the dashboard — eight builds for an
+8-shard run, with no clean "this is what develop looked like"
+single artifact. Local dev + single-host CI runners need the
+orchestrator-level loop to produce one build per branch.
+
+For multi-host CI, you'd still want each matrix cell to spawn
+its own runner, but with a shared `QLIP_BUILD_ID` (e.g.
+`${{ github.sha }}-${{ matrix.os }}`) and each cell calling
+`qlip-upload` separately — that's a different problem (and the
+server would need a "merge into existing build" endpoint that
+doesn't exist today). The single-host orchestrator avoids it.
+
+### Failure semantics
+
+Stop-on-first-failure, matching `vitest --shard`. The failing
+shard's exit code becomes the orchestrator's
+`testRunnerExitCode`. Any shards that completed before the
+failure still flushed their fragments to disk — the post-loop
+upload picks them up so the user can review the partial build
+on the dashboard. The build is "incomplete" but recoverable;
+re-running the orchestrator (with the same `QLIP_BUILD_ID` if
+desired) re-attempts the failed + remaining shards.
+
+### Memory model
+
+Each shard runs in its own Node process. Node's module cache,
+Storybook's iframe runtime state, and Playwright's browser
+context all reset between shards. The peak RAM observed in the
+2026-05-23 qorus-ide shard-1/8 run was ~4 GB; in principle that
+ceiling holds for any individual shard regardless of N, because
+shard k+1 starts with a fresh process.
+
+The implication: **N is bounded by total walltime, not peak
+RAM.** 8 shards × ~4 min ≈ 30 min per branch on qorus-ide; 16
+shards halves wall time per shard but doubles total walltime.
+Pick N so each shard fits comfortably in your RAM headroom.
+
+### Mutual exclusion with manual `--shard`
+
+If the user passes `--shard k/N` after `--` (the historical
+passthrough path for one-off CI matrix shards), the parser
+rejects with `VALIDATION_ERROR` when `--shards` is also set.
+The orchestrator owns the `--shard` flag in multi-shard mode.

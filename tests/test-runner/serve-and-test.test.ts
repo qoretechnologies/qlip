@@ -34,21 +34,32 @@ interface ISpawnHarness {
   records: ISpawnRecord[];
   setExitCode: (code: number) => void;
   setError: (err: Error) => void;
+  /**
+   * Multi-shard tests need per-invocation exit codes (e.g. shard
+   * 1+2 pass, shard 3 fails). When this queue is non-empty, each
+   * `spawn()` shifts one code off the front instead of using the
+   * single `nextExitCode`. Anything past the queue's length falls
+   * back to `nextExitCode`.
+   */
+  setExitCodeSequence: (codes: number[]) => void;
 }
 
 const makeSpawnHarness = (): ISpawnHarness => {
   const records: ISpawnRecord[] = [];
   let nextExitCode = 0;
   let nextError: Error | null = null;
+  let exitCodeQueue: number[] = [];
 
   const spawn: TSpawnFn = (command, args) => {
     records.push({ command, args: args ? [...args] : [] });
+    const exitCode =
+      exitCodeQueue.length > 0 ? exitCodeQueue.shift()! : nextExitCode;
     const child = new EventEmitter() as ChildProcess;
     Object.defineProperty(child, 'killed', { value: false, writable: true });
     Object.defineProperty(child, 'kill', { value: () => true });
     setImmediate(() => {
       if (nextError) child.emit('error', nextError);
-      else child.emit('close', nextExitCode, null);
+      else child.emit('close', exitCode, null);
     });
     return child;
   };
@@ -61,6 +72,9 @@ const makeSpawnHarness = (): ISpawnHarness => {
     },
     setError: (err) => {
       nextError = err;
+    },
+    setExitCodeSequence: (codes) => {
+      exitCodeQueue = [...codes];
     },
   };
 };
@@ -305,5 +319,166 @@ describe('runServeAndTest — upload trigger logic', () => {
     expect(error).toHaveBeenCalledWith(
       expect.stringContaining('--server-url or QLIP_UPLOAD_URL is required'),
     );
+  });
+});
+
+describe('runServeAndTest — multi-shard orchestration', () => {
+  it('rejects --shards 0 with a helpful message', async () => {
+    const harness = makeSpawnHarness();
+    const error = vi.fn();
+    const result = await runServeAndTest(
+      ['--shards', '0'],
+      {},
+      { log: vi.fn(), error },
+      harness.spawn,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining('Invalid --shards value'),
+    );
+    expect(harness.records).toHaveLength(0);
+  });
+
+  it('rejects non-integer --shards', async () => {
+    const harness = makeSpawnHarness();
+    const error = vi.fn();
+    const result = await runServeAndTest(
+      ['--shards', 'eight'],
+      {},
+      { log: vi.fn(), error },
+      harness.spawn,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining('Invalid --shards value'),
+    );
+  });
+
+  it('rejects --shards combined with a manual --shard after `--`', async () => {
+    await writeFile(path.join(tmpRoot, 'iframe.html'), '<p>hi</p>');
+    const harness = makeSpawnHarness();
+    const error = vi.fn();
+    const result = await runServeAndTest(
+      [
+        '--storybook-static',
+        tmpRoot,
+        '--shards',
+        '4',
+        '--no-upload',
+        '--',
+        '--shard',
+        '1/4',
+      ],
+      {},
+      { log: vi.fn(), error },
+      harness.spawn,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining('mutually exclusive'),
+    );
+    expect(harness.records).toHaveLength(0);
+  });
+
+  it('--shards 1 is byte-identical to the single-shard path (no --shard arg)', async () => {
+    await writeFile(path.join(tmpRoot, 'iframe.html'), '<p>hi</p>');
+    const harness = makeSpawnHarness();
+    const result = await runServeAndTest(
+      ['--storybook-static', tmpRoot, '--shards', '1', '--no-upload'],
+      {},
+      { log: vi.fn(), error: vi.fn() },
+      harness.spawn,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(harness.records).toHaveLength(1);
+    expect(harness.records[0].args).not.toContain('--shard');
+    expect(result.shardsCompleted).toBe(1);
+  });
+
+  it('--shards 4 spawns test-storybook 4 times with --shard k/4 appended', async () => {
+    await writeFile(path.join(tmpRoot, 'iframe.html'), '<p>hi</p>');
+    const harness = makeSpawnHarness();
+    const log = vi.fn();
+    const result = await runServeAndTest(
+      ['--storybook-static', tmpRoot, '--shards', '4', '--no-upload'],
+      {},
+      { log, error: vi.fn() },
+      harness.spawn,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(harness.records).toHaveLength(4);
+    // Each invocation must carry `--shard k/4` and the same --url
+    // (pointing at the same internal static server). All four
+    // children share the same effective env (QLIP_BUILD_ID pinned
+    // once before the loop) — the harness doesn't capture env, but
+    // the implementation pins it at runBuildId resolution time.
+    const url = harness.records[0].args[1];
+    expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    for (let k = 1; k <= 4; k += 1) {
+      const rec = harness.records[k - 1];
+      expect(rec.args[0]).toBe('--url');
+      expect(rec.args[1]).toBe(url); // same URL across shards
+      const shardIdx = rec.args.indexOf('--shard');
+      expect(shardIdx).toBeGreaterThan(-1);
+      expect(rec.args[shardIdx + 1]).toBe(`${String(k)}/4`);
+    }
+    expect(result.shardsCompleted).toBe(4);
+    // Per-shard log lines for human-readable progress.
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining('shard 1/4 starting'),
+    );
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining('shard 4/4 ok'),
+    );
+  });
+
+  it('stops at first failing shard and reports its exit code', async () => {
+    await writeFile(path.join(tmpRoot, 'iframe.html'), '<p>hi</p>');
+    const harness = makeSpawnHarness();
+    // shards 1 + 2 succeed, shard 3 fails with exit 7, shard 4
+    // must not be spawned at all.
+    harness.setExitCodeSequence([0, 0, 7]);
+
+    const error = vi.fn();
+    const result = await runServeAndTest(
+      ['--storybook-static', tmpRoot, '--shards', '4', '--no-upload'],
+      {},
+      { log: vi.fn(), error },
+      harness.spawn,
+    );
+
+    expect(result.exitCode).toBe(7);
+    expect(result.testRunnerExitCode).toBe(7);
+    expect(result.shardsCompleted).toBe(2);
+    // Only three spawn calls — shard 4 never started.
+    expect(harness.records).toHaveLength(3);
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining('shard 3/4 exited 7'),
+    );
+  });
+
+  it('forwards extra args after `--` to every shard (not just the first)', async () => {
+    await writeFile(path.join(tmpRoot, 'iframe.html'), '<p>hi</p>');
+    const harness = makeSpawnHarness();
+    await runServeAndTest(
+      [
+        '--storybook-static',
+        tmpRoot,
+        '--shards',
+        '3',
+        '--no-upload',
+        '--',
+        '--maxWorkers',
+        '2',
+      ],
+      {},
+      { log: vi.fn(), error: vi.fn() },
+      harness.spawn,
+    );
+    expect(harness.records).toHaveLength(3);
+    for (const rec of harness.records) {
+      expect(rec.args).toContain('--maxWorkers');
+      expect(rec.args).toContain('2');
+    }
   });
 });
