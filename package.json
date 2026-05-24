@@ -5,6 +5,10 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "qlip-upload": "./dist/test-runner/cli/upload-bin.js",
+    "qlip-serve-and-test": "./dist/test-runner/cli/serve-and-test-bin.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -15,10 +19,17 @@
       "types": "./dist/browser.d.ts",
       "default": "./dist/browser.js"
     },
+    "./test-runner": {
+      "types": "./dist/test-runner/index.d.ts",
+      "import": "./dist/test-runner/index.js",
+      "require": "./dist-cjs/test-runner/index.js",
+      "default": "./dist/test-runner/index.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "dist-cjs"
   ],
   "author": "Foxhoundn",
   "license": "MIT",
@@ -27,7 +38,10 @@
     "node": ">=18"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "npm run build:esm && npm run build:cjs && npm run build:cjs:fixup",
+    "build:esm": "tsc -p tsconfig.json",
+    "build:cjs": "tsc -p tsconfig.cjs.json",
+    "build:cjs:fixup": "node -e \"require('node:fs').writeFileSync('dist-cjs/package.json', JSON.stringify({type:'commonjs'},null,2))\"",
     "test": "vitest run",
     "test:unit": "vitest --project unit",
     "test:stories": "vitest --project storybook",
@@ -42,7 +56,13 @@
   "dependencies": {},
   "peerDependencies": {
     "vite": "^5.0.0 || ^6.0.0 || ^7.0.0",
-    "vitest": ">=2.1.0 <5.0.0"
+    "vitest": ">=2.1.0 <5.0.0",
+    "@storybook/test-runner": ">=0.19.0 <1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "vite": { "optional": true },
+    "vitest": { "optional": true },
+    "@storybook/test-runner": { "optional": true }
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
