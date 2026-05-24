@@ -457,6 +457,92 @@ describe('runServeAndTest — multi-shard orchestration', () => {
     );
   });
 
+  it('--continue-on-failure runs all shards even when some fail', async () => {
+    await writeFile(path.join(tmpRoot, 'iframe.html'), '<p>hi</p>');
+    const harness = makeSpawnHarness();
+    // Shards 1, 3 fail; shards 2, 4 pass.
+    harness.setExitCodeSequence([1, 0, 7, 0]);
+
+    const log = vi.fn();
+    const error = vi.fn();
+    const result = await runServeAndTest(
+      [
+        '--storybook-static',
+        tmpRoot,
+        '--shards',
+        '4',
+        '--continue-on-failure',
+        '--no-upload',
+      ],
+      {},
+      { log, error },
+      harness.spawn,
+    );
+
+    // All four spawn calls happened (no early stop).
+    expect(harness.records).toHaveLength(4);
+    // Final exit code is the LAST non-zero (shard 3's exit 7),
+    // matching the "any failure → non-zero" CI convention.
+    expect(result.exitCode).toBe(7);
+    expect(result.testRunnerExitCode).toBe(7);
+    expect(result.shardsRan).toBe(4);
+    expect(result.shardsCompleted).toBe(2); // shards 2, 4 succeeded
+    expect(result.shardsFailed).toEqual([1, 3]);
+    // The continue log line is explicit (vs the default "stopping").
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining('shard 1/4 exited 1 — continuing'),
+    );
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining('shard 3/4 exited 7 — continuing'),
+    );
+    // The banner names the mode so log scanners can pick it up.
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining('[continue-on-failure]'),
+    );
+  });
+
+  it('--continue-on-failure with all shards passing returns 0 and records empty shardsFailed', async () => {
+    await writeFile(path.join(tmpRoot, 'iframe.html'), '<p>hi</p>');
+    const harness = makeSpawnHarness();
+    const result = await runServeAndTest(
+      [
+        '--storybook-static',
+        tmpRoot,
+        '--shards',
+        '3',
+        '--continue-on-failure',
+        '--no-upload',
+      ],
+      {},
+      { log: vi.fn(), error: vi.fn() },
+      harness.spawn,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.shardsCompleted).toBe(3);
+    expect(result.shardsRan).toBe(3);
+    expect(result.shardsFailed).toEqual([]);
+  });
+
+  it('without --continue-on-failure (default) keeps the stop-on-first-failure path', async () => {
+    // Regression guard: confirm the new flag's introduction didn't
+    // accidentally change the default semantics.
+    await writeFile(path.join(tmpRoot, 'iframe.html'), '<p>hi</p>');
+    const harness = makeSpawnHarness();
+    harness.setExitCodeSequence([0, 5]);
+    const result = await runServeAndTest(
+      ['--storybook-static', tmpRoot, '--shards', '4', '--no-upload'],
+      {},
+      { log: vi.fn(), error: vi.fn() },
+      harness.spawn,
+    );
+    // Shard 2 failed → shards 3 and 4 never ran.
+    expect(harness.records).toHaveLength(2);
+    expect(result.exitCode).toBe(5);
+    expect(result.shardsRan).toBe(2);
+    expect(result.shardsCompleted).toBe(1);
+    expect(result.shardsFailed).toEqual([2]);
+  });
+
   it('forwards extra args after `--` to every shard (not just the first)', async () => {
     await writeFile(path.join(tmpRoot, 'iframe.html'), '<p>hi</p>');
     const harness = makeSpawnHarness();

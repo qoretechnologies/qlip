@@ -89,6 +89,23 @@ interface IParsedArgs {
    * second shard).
    */
   shards: number;
+  /**
+   * When `true`, a non-zero shard exit does NOT stop the loop —
+   * subsequent shards still spawn and contribute their captures.
+   * The orchestrator's final exit code is the LAST non-zero shard
+   * exit (or 0 if every shard passed).
+   *
+   * Use case: **visual regression demos and dashboards**, where a
+   * shard exit code says "some play function asserted false" — the
+   * SCREENSHOT for that story still got captured, and the dashboard
+   * is where we want to *see* the regression. Stopping at shard 1
+   * just because story 27 of 158 failed an assertion would lose
+   * coverage on the other 7 shards.
+   *
+   * Default (`false`) preserves the CI-style stop-on-first-failure
+   * semantics that match `vitest --shard`.
+   */
+  continueOnFailure: boolean;
 }
 
 const USAGE = `qlip-serve-and-test — orchestrate storybook static → test-storybook → upload
@@ -121,6 +138,15 @@ Options:
                                 Default: 1 (no sharding).
                                 Mutually exclusive with passing
                                 --shard k/N after \`--\`.
+  --continue-on-failure         When a shard exits non-zero, continue
+                                with the remaining shards instead of
+                                stopping. Final exit code is the LAST
+                                non-zero shard exit (or 0 if all
+                                passed). Useful for visual-regression
+                                demos where assertion failures don't
+                                invalidate the captured screenshots.
+                                Default: off (stop on first failure,
+                                matching \`vitest --shard\`).
   -h, --help                    Show this help.
 
 Env vars (passed through to test-storybook + qlip-upload):
@@ -144,6 +170,7 @@ const parseArgs = (argv: string[]): IParsedArgs => {
     testRunnerArgs: [],
     help: false,
     shards: 1,
+    continueOnFailure: false,
   };
   let passThrough = false;
   for (let i = 0; i < argv.length; i += 1) {
@@ -196,6 +223,9 @@ const parseArgs = (argv: string[]): IParsedArgs => {
         args.shards = parsed;
         break;
       }
+      case '--continue-on-failure':
+        args.continueOnFailure = true;
+        break;
       default:
         if (arg.startsWith('-')) {
           throw new Error(`Unknown option: ${arg}`);
@@ -257,13 +287,28 @@ export interface IRunServeAndTestResult {
   /** Test-storybook's exit code, even when upload changed the final code. */
   testRunnerExitCode?: number;
   /**
-   * How many shards finished with exit 0. For the single-shard path
-   * this is 0 (if test-storybook failed) or 1 (success). For
-   * `--shards N`, this is the index of the last successful shard
-   * (so `N` means all passed; `K < N` means K passed and K+1 was
-   * the one that failed).
+   * **Count** of shards that finished with exit 0 (not the index
+   * of the last one — see the older revision history if confused).
+   * With the default stop-on-first-failure path, this is either
+   * `N` (all passed) or `K` where shard K+1 was the failure. With
+   * `--continue-on-failure`, this may be less than `shardsRan`
+   * (e.g. 6 if shards 3 and 7 failed but all 8 ran).
    */
   shardsCompleted?: number;
+  /**
+   * How many shards the loop actually spawned. With the default
+   * stop-on-first-failure, equals `shardsCompleted` (until the
+   * failure) or `shardsCompleted + 1` (the failing shard ran but
+   * didn't complete-as-success). With `--continue-on-failure`,
+   * equals N — every shard ran regardless of outcome.
+   */
+  shardsRan?: number;
+  /**
+   * Shard indices (1-based) that exited non-zero. Empty when
+   * everything passed. Useful for tests asserting the
+   * continue-on-failure path actually visited all shards.
+   */
+  shardsFailed?: number[];
 }
 
 /**
@@ -371,6 +416,8 @@ export const runServeAndTest = async (
 
   let testRunnerExitCode = 0;
   let shardsCompleted = 0;
+  let shardsRan = 0;
+  const shardsFailed: number[] = [];
   try {
     // Single-shard fast path: no per-iteration log noise, no --shard
     // arg passed at all. Behaviour is byte-identical to the
@@ -385,7 +432,9 @@ export const runServeAndTest = async (
       );
       testRunnerChild = child;
       testRunnerExitCode = await promise;
+      shardsRan = 1;
       if (testRunnerExitCode === 0) shardsCompleted = 1;
+      else shardsFailed.push(1);
     } else {
       // Multi-shard path: spawn sequentially. Each child gets a
       // unique `--shard k/N` appended to its args. They all share
@@ -393,13 +442,17 @@ export const runServeAndTest = async (
       // under one buildDir and the post-loop upload merges every
       // fragment into one build.
       //
-      // Stop-on-first-failure: matches `vitest --shard` semantics
-      // and what most users expect from a CI orchestrator. Any
-      // shards that DID complete still contributed fragments to
-      // disk; the upload step (further below) picks them up so the
-      // user can review the partial build on the dashboard.
+      // Default: stop-on-first-failure, matching `vitest --shard`
+      // semantics and what most users expect from a CI orchestrator.
+      // With `--continue-on-failure`, log the failing shard and
+      // keep going so the dashboard ends up with every shard's
+      // captures merged in — the right default for visual-regression
+      // demos where assertion failures don't invalidate the
+      // captured screenshots.
       logger.log(
-        `[qlip] running ${String(parsed.shards)} shards sequentially (buildId=${runBuildId})`,
+        `[qlip] running ${String(parsed.shards)} shards sequentially (buildId=${runBuildId})${
+          parsed.continueOnFailure ? ' [continue-on-failure]' : ''
+        }`,
       );
       for (let k = 1; k <= parsed.shards; k += 1) {
         logger.log(
@@ -420,17 +473,33 @@ export const runServeAndTest = async (
         testRunnerChild = child;
         // eslint-disable-next-line no-await-in-loop -- intentional: sequential by design (memory reset between shards)
         const shardExitCode = await promise;
+        shardsRan = k;
         if (shardExitCode !== 0) {
+          shardsFailed.push(k);
+          // Last-non-zero wins for the orchestrator's final exit
+          // code — CI cares "did anything fail" more than which
+          // specific shard's code it was.
+          testRunnerExitCode = shardExitCode;
+          if (parsed.continueOnFailure) {
+            logger.error(
+              `[qlip] shard ${String(k)}/${String(parsed.shards)} exited ${String(shardExitCode)} — continuing (--continue-on-failure)`,
+            );
+            continue;
+          }
           logger.error(
             `[qlip] shard ${String(k)}/${String(parsed.shards)} exited ${String(shardExitCode)} — stopping`,
           );
-          testRunnerExitCode = shardExitCode;
           break;
         }
         logger.log(
           `[qlip] shard ${String(k)}/${String(parsed.shards)} ok`,
         );
-        shardsCompleted = k;
+        // Count successful shards (not the index). With
+        // stop-on-first-failure the two are interchangeable, but
+        // with --continue-on-failure "index of last successful"
+        // would be wrong (e.g. shards 1,4,7 succeed → count=3,
+        // index=7).
+        shardsCompleted += 1;
       }
     }
   } catch (err) {
@@ -468,6 +537,8 @@ export const runServeAndTest = async (
       url,
       testRunnerExitCode,
       shardsCompleted,
+      shardsRan,
+      shardsFailed,
     };
   }
 
@@ -488,7 +559,14 @@ export const runServeAndTest = async (
     exitCode = uploadResult.exitCode;
   }
 
-  return { exitCode, url, testRunnerExitCode, shardsCompleted };
+  return {
+    exitCode,
+    url,
+    testRunnerExitCode,
+    shardsCompleted,
+    shardsRan,
+    shardsFailed,
+  };
 };
 
 // NOTE: bin entry lives at `./serve-and-test-bin.ts`. See
