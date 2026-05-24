@@ -149,11 +149,21 @@ describe('screenshot capture', () => {
       },
     };
 
+    // Simulate Vitest's `task.result.errors` shape so the runtime
+    // can pull the originating failure into the manifest entry.
     await captureErrorScreenshot({
       task: {
         meta: { storyId: 'example--page' },
         name: 'Logged In',
         suite: { name: 'Example/Page' },
+        result: {
+          errors: [
+            {
+              message: 'expected Button to be visible',
+              stack: 'at play (Page.stories.ts:42:3)',
+            },
+          ],
+        },
       },
       story: {
         id: 'example--page',
@@ -162,8 +172,41 @@ describe('screenshot capture', () => {
 
     const state = getRuntimeState();
     const entry = state?.manifest.entries[0];
-    expect(entry?.kind).toBe('manual');
+    expect(entry?.kind).toBe('error');
     expect(entry?.screenshotName).toBe('qlip-auto-error-capture');
+    expect(entry?.error?.message).toBe('expected Button to be visible');
+    expect(entry?.error?.stack).toBe('at play (Page.stories.ts:42:3)');
+    // Error captures bump `failed` but NOT `capturedManual` (they
+    // aren't user-initiated screenshot() calls) and NOT
+    // `storiesTotal` (auto entry already counted it).
+    expect(state?.manifest.stats.failed).toBe(1);
+    expect(state?.manifest.stats.capturedManual).toBe(0);
+    expect(state?.manifest.stats.storiesTotal).toBe(0);
+    // File path lands under the `error/` subtree so static review
+    // tooling can grep them out without re-reading the manifest.
+    expect(entry?.path).toMatch(/\/error\//);
+  });
+
+  it('error capture survives missing task.result (older Vitest shape)', async () => {
+    const { page } = await import('@vitest/browser/context');
+    page.screenshot.mockResolvedValue('ok');
+    globalThis.__QLIP_CONFIG__ = {
+      ...runtimeConfig,
+      defaults: { ...runtimeConfig.defaults, captureOnError: true },
+    };
+    await captureErrorScreenshot({
+      task: {
+        meta: { storyId: 'example--page' },
+        name: 'Logged In',
+        suite: { name: 'Example/Page' },
+      },
+      story: { id: 'example--page' },
+    } as never);
+    const entry = getRuntimeState()?.manifest.entries[0];
+    expect(entry?.kind).toBe('error');
+    // No error info available → field stays null rather than
+    // carrying a misleading placeholder.
+    expect(entry?.error).toBeNull();
   });
 
   it('records failures when capture throws', async () => {

@@ -340,11 +340,20 @@ const captureScreenshot = async ({
   story,
   screenshotName,
   options,
+  testError,
 }: {
   kind: QlipEntryKind;
   story: ReturnType<typeof resolveStoryInfo>;
   screenshotName?: string;
   options?: QlipScreenshotOptions;
+  /**
+   * For `kind: 'error'` captures, the originating test failure that
+   * triggered this screenshot. Stored on the manifest entry's
+   * `error` field even when the screenshot itself captures
+   * successfully — so reviewers see *why* the test failed, not just
+   * the post-failure DOM.
+   */
+  testError?: { message: string; stack?: string } | null;
 }) => {
   const runtime = initRuntimeState();
   if (!runtime) {
@@ -371,12 +380,26 @@ const captureScreenshot = async ({
     override: options,
   });
 
+  // Name conventions:
+  //   - 'auto'   → fixed 'auto'
+  //   - 'manual' → user-supplied or auto-numbered ('step-1'…)
+  //   - 'error'  → 'qlip-auto-error-capture' (or '-2', '-3' for
+  //                multiple errors on the same story). The
+  //                `qlip-auto-error-capture` prefix is what the
+  //                fs/output layer keys off to route to `error/`.
   const name =
     kind === 'manual'
       ? sanitizeSegment(screenshotName ?? nextStepName(runtime, story.id))
-      : 'auto';
+      : kind === 'error'
+        ? sanitizeSegment(screenshotName ?? AUTO_ERROR_SCREENSHOT_BASE)
+        : 'auto';
 
   const captureStart = Date.now();
+
+  // `kind: 'error'` shares the manual path resolver — the helper
+  // detects the `qlip-auto-error-capture` prefix on the screenshot
+  // name and routes to the `error/` subtree automatically.
+  const usesNamedPath = kind === 'manual' || kind === 'error';
 
   if (resolved.skip) {
     flushConsoleLogs(runtime);
@@ -388,24 +411,23 @@ const captureScreenshot = async ({
         storyTitle: story.title,
         storyName: story.name,
         screenshotName: name,
-        relativePath:
-          kind === 'manual'
-            ? buildManualScreenshotPath({
-                buildDir: runtime.config.buildDir,
-                storyId: story.id,
-                storyTitle: story.title,
-                storyName: story.name,
-                screenshotName: name,
-              }).relativePath
-            : buildAutoScreenshotPath({
-                buildDir: runtime.config.buildDir,
-                storyId: story.id,
-                storyTitle: story.title,
-                storyName: story.name,
-              }).relativePath,
+        relativePath: usesNamedPath
+          ? buildManualScreenshotPath({
+              buildDir: runtime.config.buildDir,
+              storyId: story.id,
+              storyTitle: story.title,
+              storyName: story.name,
+              screenshotName: name,
+            }).relativePath
+          : buildAutoScreenshotPath({
+              buildDir: runtime.config.buildDir,
+              storyId: story.id,
+              storyTitle: story.title,
+              storyName: story.name,
+            }).relativePath,
         viewport: resolved.viewport,
         status: 'skipped',
-        error: null,
+        error: testError ?? null,
         timingsMs: Date.now() - captureStart,
       }),
     );
@@ -427,7 +449,7 @@ const captureScreenshot = async ({
 
   let relativePath = '';
   let absolutePath = '';
-  if (kind === 'manual') {
+  if (usesNamedPath) {
     const pathInfo = buildManualScreenshotPath({
       buildDir: runtime.config.buildDir,
       storyId: story.id,
@@ -449,7 +471,11 @@ const captureScreenshot = async ({
   }
 
   let status: QlipEntryStatus = 'captured';
-  let error: { message: string; stack?: string } | null = null;
+  // Pre-seed `error` with the originating test failure (if any) so
+  // it survives a successful capture; the catch block below
+  // overwrites with the *capture* error if the PNG write itself
+  // throws.
+  let error: { message: string; stack?: string } | null = testError ?? null;
   let cleanupMasks: (() => void) | null = null;
   try {
     await page.viewport(resolved.viewport.width, resolved.viewport.height);
@@ -476,21 +502,20 @@ const captureScreenshot = async ({
   const flushed = flushConsoleLogs(runtime);
   let logsPath: string | undefined;
   if (resolved.captureConsole && flushed.length > 0) {
-    const logPathInfo =
-      kind === 'manual'
-        ? buildManualLogPath({
-            buildDir: runtime.config.buildDir,
-            storyId: story.id,
-            storyTitle: story.title,
-            storyName: story.name,
-            screenshotName: name,
-          })
-        : buildAutoLogPath({
-            buildDir: runtime.config.buildDir,
-            storyId: story.id,
-            storyTitle: story.title,
-            storyName: story.name,
-          });
+    const logPathInfo = usesNamedPath
+      ? buildManualLogPath({
+          buildDir: runtime.config.buildDir,
+          storyId: story.id,
+          storyTitle: story.title,
+          storyName: story.name,
+          screenshotName: name,
+        })
+      : buildAutoLogPath({
+          buildDir: runtime.config.buildDir,
+          storyId: story.id,
+          storyTitle: story.title,
+          storyName: story.name,
+        });
     logsPath = logPathInfo.relativePath;
     await commands.writeFile(
       logPathInfo.absolutePath,
@@ -523,6 +548,20 @@ const captureScreenshot = async ({
           : runtime.manifest.stats.capturedAuto,
       failed:
         status === 'failed'
+          ? runtime.manifest.stats.failed + 1
+          : runtime.manifest.stats.failed,
+    });
+  } else if (kind === 'error') {
+    // Error captures don't bump `storiesTotal` (the matching auto
+    // entry already did) and don't count toward `capturedManual`
+    // (they're not user-initiated `screenshot()` calls). They DO
+    // bump `failed` so the build-level failed counter reflects
+    // story test failures even when the auto capture happened to
+    // succeed. The server filters error-kind entries to render the
+    // dedicated "Failures" surface.
+    updateStats(runtime, {
+      failed:
+        status === 'captured' || status === 'failed'
           ? runtime.manifest.stats.failed + 1
           : runtime.manifest.stats.failed,
     });
@@ -656,9 +695,41 @@ export const captureErrorScreenshot = async (ctx: QlipTestContext) => {
   if (!story.title && ctx.task.suite?.name) {
     story.title = ctx.task.suite.name;
   }
+  // Pull the originating test failure from Vitest's `task.result`
+  // shape so the manifest entry carries *why* the test failed, not
+  // just the post-failure DOM. Falls back to a generic marker if the
+  // shape isn't available (older Vitest, custom runner adapters).
+  const failureError = extractTestFailureError(ctx);
   await captureScreenshot({
-    kind: 'manual',
+    kind: 'error',
     story,
     screenshotName: pickUniqueErrorName(runtime.manifest.entries),
+    testError: failureError,
   });
+};
+
+/**
+ * Pull the first failure-error from a Vitest task result. Vitest
+ * stores them as an array on `task.result.errors`; in practice
+ * the first entry is the one that actually fired. Returns null when
+ * the shape is missing so the manifest entry's `error` field stays
+ * null rather than carrying a misleading placeholder.
+ */
+const extractTestFailureError = (
+  ctx: QlipTestContext,
+): { message: string; stack?: string } | null => {
+  const result = (ctx.task as { result?: { errors?: unknown } }).result;
+  if (!result || !Array.isArray(result.errors) || result.errors.length === 0) {
+    return null;
+  }
+  const first = result.errors[0] as
+    | { message?: unknown; stack?: unknown }
+    | undefined;
+  if (!first || typeof first.message !== 'string') {
+    return null;
+  }
+  return {
+    message: first.message,
+    stack: typeof first.stack === 'string' ? first.stack : undefined,
+  };
 };

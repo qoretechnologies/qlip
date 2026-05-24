@@ -101,7 +101,21 @@ export interface QlipConsoleMessage {
   timestamp: number;
 }
 
-export type QlipEntryKind = 'auto' | 'manual';
+/**
+ * Manifest entry kind discriminant.
+ *   - `auto`   — post-render screenshot taken in `afterEach` for
+ *                every story.
+ *   - `manual` — explicit `screenshot()` call inside a `play`
+ *                function.
+ *   - `error`  — screenshot captured at the moment a test failed.
+ *                Always paired with a populated `error.message` on
+ *                the same manifest entry; never has a baseline
+ *                comparison (the server skips diff for this kind).
+ *                See `captureErrorScreenshot` in
+ *                `src/runtime/screenshot.ts` and the contract notes
+ *                in `qlip/design/MANIFEST.md`.
+ */
+export type QlipEntryKind = 'auto' | 'manual' | 'error';
 export type QlipEntryStatus = 'captured' | 'skipped' | 'failed';
 
 export interface QlipManifestEntry {
