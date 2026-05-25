@@ -30,6 +30,12 @@ hasn't been written yet, not that it's been ruled out.
   plugin; same manifest, same upload, same review UI. Architecture
   diagram, code-reuse table, capture lifecycle, CLI surface,
   effort estimate, and how-to-extend section all in the doc.
+- **INTEGRATION_PATHS.md** ✓ — the consumer-facing "which path
+  should I use?" guide. Decision table, side-by-side comparison of
+  Vitest plugin vs. runner, what's shared between the two,
+  migration steps between paths, and how-to-extend rules for
+  keeping the two paths in sync. Link this from the package README
+  before any other design doc.
 
 ## Conventions
 
