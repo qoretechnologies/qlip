@@ -4,13 +4,14 @@ Qlip is a Storybook screenshot capture tool. Add it to your project and every st
 
 ## Choosing your integration
 
-Qlip ships **two integration paths**. They produce identical screenshot bundles and upload to the same server — pick by project size.
+Qlip ships **two integration paths**. They produce identical screenshot bundles and upload to the same server — pick by tooling preference, not project size.
 
-| Your Storybook | Path | Why |
+| Your situation | Path | Why |
 |---|---|---|
-| < 150 stories, no full-app-shell components | **Vitest plugin** (below) | One extra dep. Screenshots happen as a side effect of `yarn test:stories`. |
-| 150+ stories, or any full-app/dashboard-class story files | **Runner** (`qlip-serve-and-test`) | Vitest browser-mode accumulates per-file module cache; large suites hit OOM. The runner shards into independent processes. |
-| You're not sure | Start with the Vitest plugin. Switch to runner if you OOM — switching is one new command, nothing else changes. | |
+| Greenfield, ≤150 stories | **Vitest plugin** (default config) | One extra dep. Screenshots happen as a side effect of `yarn test:stories`. |
+| 150+ stories / heavy components | **Vitest plugin (memory-safe config)** | Add `pool: 'forks' + maxForks: N` — see [Memory-safe config](#memory-safe-config-for-large-storybooks). |
+| Can't be on Vitest 4 / want zero-Vitest capture | **Runner** (`qlip-serve-and-test`) | Decoupled from consumer's Vitest version. |
+| Already running `@storybook/test-runner` | **Runner** | Add one `postVisit` hook to the test-runner you already have. |
 
 The full comparison + when-to-switch guide is in [`design/INTEGRATION_PATHS.md`](./design/INTEGRATION_PATHS.md). The runner architecture is in [`design/RUNNER.md`](./design/RUNNER.md).
 
@@ -166,6 +167,36 @@ qlipVitestPlugin({
 `waitForIdleMs` waits for DOM mutations to settle before taking a screenshot. This is especially useful for animation libraries like `react-spring` that update inline styles via `requestAnimationFrame`, which bypasses CSS-based animation disabling. Increase it if you still catch mid-transition frames, or lower it for faster runs when your UI is static. `maxWaitForIdleMs` caps the wait so stories with continuously changing UI still complete.
 
 `ignoreElements` lets you provide CSS selectors to mask before capture. Qlip draws solid overlays on matching elements so layout stays intact while visual diffs ignore those regions.
+
+## Memory-safe config for large Storybooks
+
+If your Storybook has more than ~150 stories, or any stories that mount a heavy app shell (dashboards, multi-pane editors, etc.), the **default Vitest browser-mode** can OOM — it spawns one worker per CPU core, each with its own BrowserContext, and on a 12-core machine that's easily 20+ GB peak RAM.
+
+The fix is **two extra lines** in your storybook project's test config — switch the pool to forks and cap concurrency:
+
+```ts
+test: {
+  name: 'storybook',
+  browser: { enabled: true, headless: true, provider: playwright({}), instances: [{ browser: 'chromium' }] },
+  // ↓ The memory-safe knobs ↓
+  pool: 'forks',
+  poolOptions: {
+    forks: { maxForks: 3, minForks: 1, isolate: true },
+  },
+  setupFiles: ['.storybook/vitest.setup.ts'],
+}
+```
+
+Each fork peaks at ~3 GB RSS during a heavy story's chromium render, so the rule of thumb is `maxForks ≤ (free_RAM_GB - 4) / 3`:
+
+| Environment | Suggested `maxForks` |
+|---|---|
+| GitHub Actions Linux runner (~7 GB) | 1 |
+| 16 GB Mac (M1/M2 base) | 2 |
+| 24 GB Mac (M4 Pro / M3 Pro) | 3 |
+| 32 GB+ workstation | 4–6 |
+
+Verified on a real consumer (qorus-ide, 90 story files / 643 tests, Vitest 2.1.9, Storybook 8.5): **7 min wall time, 7.9 GB peak RSS, full suite completed with no OOM**. Full background in [`design/INTEGRATION_PATHS.md`](./design/INTEGRATION_PATHS.md#memory-safe-config-for-large-storybooks).
 
 ## Output layout
 

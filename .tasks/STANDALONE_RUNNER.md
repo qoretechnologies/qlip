@@ -1,23 +1,36 @@
 # Task: standalone runner (Storybook test-runner mode)
 
-**Status:** **decision locked 2026-05-23, ready to implement**
-(architecture refined — see "Architecture update" below)
-**Owner:** unassigned
-**Design:** `design/RUNNER.md` (original sketch; superseded by
-`../../docs/RUNNER_IMPLEMENTATION_PLAN.md` for the actual shape)
+**Status:** **shipped** (Phase R-1..R-5 complete as of 2026-05-24).
+**Position:** sibling capture path to the Vitest plugin, not a
+successor. Both are first-class.
+**Design:** `design/RUNNER.md`
 **Decision context:**
 - `../../../PROGRESS.md` 2026-05-22 — "Standalone runner direction"
   (initial design)
 - `../../../PROGRESS.md` 2026-05-23 — "Runner direction LOCKED"
-  (decision after empirical OOM tests)
-- `../../../docs/WHY_NOT_VITEST_FOR_QORUS_IDE.md` (verification trail)
-- `../../../docs/RUNNER_IMPLEMENTATION_PLAN.md` (refined architecture
-  + day-by-day plan)
-**Severity:** **demo-blocker for the primary target (qorus-ide).**
-The Vitest plugin path is architecturally limited at qorus-ide's
-scale; the runner library is the only path that delivers "super good
-and fast" on application-class Storybooks. Verified via 3 OOM tests
-on 2026-05-23.
+  (decision after empirical OOM tests with default vitest pool config)
+- `../../../PROGRESS.md` 2026-05-24 — "Multi-shard orchestration"
+  (Phase R-5 ships)
+- `../../../PROGRESS.md` 2026-05-25 — "Vitest plugin path saved via
+  pool: 'forks' + maxForks: 3" (the "architecturally limited" claim
+  below was retracted)
+
+**Why the framing below was retracted (2026-05-25).** The 2026-05-23
+OOM tests were run with vitest's default pool config (threads,
+unbounded fileParallelism). Switching to `pool: 'forks' + maxForks: 3
++ isolate: true` lifted the wall — qorus-ide completes the full
+90-file suite in 7 min at 7.9 GB peak. The runner remains the right
+answer for consumers pinned to old Vitest versions or who already use
+`@storybook/test-runner` for other reasons, but it is no longer
+"the only path" for application-class Storybooks. See
+`design/INTEGRATION_PATHS.md` for the current decision matrix.
+
+> Historical framing (kept for context):
+> *Severity: demo-blocker for the primary target (qorus-ide). The
+> Vitest plugin path is architecturally limited at qorus-ide's
+> scale; the runner library is the only path that delivers "super
+> good and fast" on application-class Storybooks. Verified via 3 OOM
+> tests on 2026-05-23.*
 
 ## Architecture update (2026-05-23)
 

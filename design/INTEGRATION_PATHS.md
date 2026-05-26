@@ -1,28 +1,37 @@
 # Choosing your integration: Vitest plugin vs. standalone runner
 
-> Status: living guide, written 2026-05-25 after qorus-ide-class workloads
-> exposed the limits of the Vitest plugin path. Companion to
-> `RUNNER.md` (architecture of the runner) and `UPLOAD.md` (the wire
+> Status: living guide. Revised 2026-05-25 after the Vitest plugin path
+> was shown viable for qorus-ide-class workloads with the right pool
+> config (PROGRESS.md decision log entry of the same date). Companion
+> to `RUNNER.md` (architecture of the runner) and `UPLOAD.md` (the wire
 > contract both paths share).
+>
+> Previous version of this doc framed the Vitest plugin as suitable only
+> for ≤150 stories. That cap was a consequence of the **default** pool
+> config (threads + unbounded fileParallelism), not of the plugin
+> itself. See "Memory-safe config for large Storybooks" below.
 
 `@qoretechnologies/qlip` ships **two integration paths**. Both produce
 identical manifest + screenshot bundles and POST to the same
 `/api/builds/upload` endpoint on qlip-server — the server can't tell
-them apart. Pick the path that fits your project's size + tooling.
+them apart. Pick the path that fits your project's tooling, not its size.
+
+<!-- Decision: see PROGRESS.md 2026-05-25 — Vitest plugin path saved on qorus-ide via pool: 'forks' + maxForks: 3 -->
 
 ---
 
 ## TL;DR — decision table
 
-| Your Storybook | Recommended path | Why |
+| Your situation | Recommended path | Why |
 |---|---|---|
-| < 50 stories | **Vitest plugin** | Zero extra dependencies; runs as a side effect of your existing `yarn test:stories`. |
-| 50–150 stories, light/medium components | **Vitest plugin** | Still comfortable. Budget RAM if components are heavy. |
-| 150+ stories OR full-app-shell stories OR dashboard-class components | **Runner** | Vitest browser-mode accumulates per-file module cache; large suites hit OOM. The runner shards into independent processes. |
-| You're not sure | Start with Vitest plugin. Switch to runner if you OOM. Switching is just changing the invocation — nothing else moves. | |
+| Greenfield, ≤150 stories | **Vitest plugin** (default config) | Zero extra dependencies; runs as a side effect of `yarn test:stories`. |
+| 150+ stories / heavy components / full-app-shell stories | **Vitest plugin (memory-safe config)** | Add `pool: 'forks' + maxForks: N` (see recipe below). Verified on qorus-ide (90 files, 643 tests, 7 min, 7.9 GB peak). |
+| Cannot upgrade Vitest (pinned to 1.x / 2.x for other reasons) and want zero-Vitest capture | **Runner** | Decoupled from consumer's Vitest version. Test-runner ships its own Jest internally. |
+| Already use `@storybook/test-runner` for other reasons (a11y, etc.) | **Runner** | Drop one more `postVisit` hook in; reuse the test-runner you already run. |
+| You're not sure | Start with Vitest plugin (default). Move to memory-safe config if you OOM, runner if you can't be on Vitest 4. | |
 
-The two paths are not redundant — they target different size envelopes.
-Keep both available; consumers pick at integration time.
+The two paths target different *tooling preferences*, not different
+size envelopes. Keep both available; consumers pick at integration time.
 
 ---
 
@@ -46,13 +55,112 @@ when the test run finishes.
 - Custom `it()`/`test()` blocks layered on top of stories still run (the runner doesn't see those).
 - Vitest snapshot matchers, vitest mocks, vitest hooks all work normally.
 
-**Limits.**
-- Vitest creates a new BrowserContext per test file; per-file Node module cache never clears (acknowledged by the Vitest team — there's no API in Node to clear it).
-- For qorus-ide-class workloads (215 files, several mounting the full IDE chrome), we measured **40 GB peak RSS and OOM** at ~file 55/215. Even with captures turned off — i.e. the OOM is in Vitest itself, not qlip.
-- Sharding through addon-vitest doesn't work cleanly today; the addon resolves the full story set from Storybook's config and ignores Vitest's CLI file filters.
+**Limits — and the config that lifts them.**
 
-See `docs/WHY_NOT_VITEST_FOR_QORUS_IDE.md` at the project root for the
-full trail of empirical evidence.
+The historical concern was that vitest browser-mode accumulates per-file
+BrowserContexts and module cache, and at default settings spawns one
+worker per CPU core. On a 12-core M4 Pro that's 12 concurrent
+BrowserContexts × ~2 GB each = 24 GB peak, which OOMs even before
+captures are involved. We measured this on qorus-ide (May 23, 2026):
+40 GB peak RSS, OOM at file ~55, captures on **or** off — the OOM was
+in vitest, not qlip.
+
+**The cap is removed by switching `pool: 'threads'` (default) →
+`pool: 'forks'` and capping concurrent forks via `maxForks`.** See
+"Memory-safe config for large Storybooks" below. Verified on qorus-ide
+(90 files / 643 tests / 7 min / 7.9 GB peak — well within budget on a
+24 GB Mac).
+
+Two genuine remaining limits, neither of which the runner avoids:
+- **vite dep-optimization re-runs.** On Storybook + Vitest 2/3, vite
+  may re-optimize deps mid-run and cause a handful of test files to
+  execute twice. Adds wall time, doesn't affect correctness.
+  Tracked upstream (Storybook #33067).
+- **No upstream API to clear Node's module cache.** Per-fork
+  accumulation within a single fork still grows linearly with files;
+  `isolate: true` (default) ensures fork *processes* die between files,
+  which is what bounds memory. Without per-fork process recycling, a
+  long-running single-fork run can still climb (we saw this with
+  `singleFork: true` — bounded but slow, and a separate liveness issue
+  hit on play-function failures).
+
+---
+
+## Memory-safe config for large Storybooks
+
+Drop the following into your `vitest.workspace.ts` / `vitest.config.ts`
+storybook project:
+
+```ts
+{
+  test: {
+    name: 'storybook',
+    browser: {
+      enabled: true,
+      headless: true,
+      provider: playwright({}),
+      instances: [{ browser: 'chromium' }],
+    },
+    // ↓ THE memory-safe knobs ↓
+    pool: 'forks',
+    poolOptions: {
+      forks: {
+        maxForks: 3,       // tune to your cores + RAM
+        minForks: 1,
+        isolate: true,     // default — pinned for clarity
+      },
+    },
+    fileParallelism: true, // default — forks distribute files across themselves
+    setupFiles: ['.storybook/vitest.setup.ts'],
+  },
+  plugins: [
+    react(),
+    storybookTest({ configDir: '.storybook' }),
+    qlipVitestPlugin({ /* your options */ }),
+  ],
+}
+```
+
+### Tuning `maxForks`
+
+Each fork peaks at ~3 GB RSS during a heavy file's chromium render. So
+the rule of thumb is:
+
+```
+maxForks ≤ (free_RAM_GB - 4) / 3
+```
+
+| Hardware | Suggested maxForks | Expected peak |
+|---|---|---|
+| 8 GB MacBook (CI runner, GitHub Actions Linux) | 1 | ~3 GB |
+| 16 GB Mac (M1/M2 base) | 2 | ~6 GB |
+| 24 GB Mac (M4 Pro / M3 Pro 18-24 GB) | 3 | ~9 GB |
+| 32 GB workstation | 4–6 | ~12-18 GB |
+
+If you don't know, start with `maxForks: 2` and bump up if your run is
+slow but RAM is comfortable. Don't blindly set to CPU count — that's
+exactly what the default was doing and it doesn't work.
+
+### A safety net while testing
+
+A scratch run that goes wrong on a 90-file Storybook can lock a
+laptop into swap for a long time. The repo ships
+`scripts/watchdog-rss.sh` for exactly this — it wraps any command,
+walks the process tree's RSS every N seconds, and SIGTERMs the whole
+group when it crosses a threshold. Example:
+
+```bash
+# 18 GB ceiling, 2-second polling, abortable via `touch /tmp/abort`
+./scripts/watchdog-rss.sh 18000 \
+  --interval=2 \
+  --log=/tmp/wd.log \
+  --abort-file=/tmp/abort \
+  -- yarn vitest run --project storybook
+```
+
+This is a generic safety harness for any expensive test command, not a
+qlip-specific feature. Use it the first time you flip `auto: true` on
+a large Storybook, then drop it once you know the run fits.
 
 ---
 

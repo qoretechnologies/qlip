@@ -14,28 +14,39 @@ and the same review UI.
 
 ## Why this exists
 
-The existing Vitest plugin couples qlip to a specific Vitest major
-version (currently `^4.0.0` via `peerDependencies`). Real-world
-consumers don't all upgrade in lockstep — `qorus-ide` is pinned to
-Vitest `^2.1.4` (Storybook 8.5 compat) and can't consume our newest
-qlip without breaking its own test setup. Asking every consumer to
-align their Vitest with ours is unrealistic.
+The runner is an **alternative** capture path, not a fallback for when
+the Vitest plugin fails. With the right pool config (`pool: 'forks' +
+maxForks: N`, see `INTEGRATION_PATHS.md` "Memory-safe config"), the
+Vitest plugin handles qorus-ide-class workloads cleanly — that was
+verified empirically on 2026-05-25. So the runner is *not* required
+for large Storybooks anymore.
 
-Chromatic dodges this by **decoupling capture from the consumer's
-test runner**: their cloud builds the consumer's Storybook, renders
-each story in their own Playwright, and screenshots. The consumer's
-test runner is irrelevant.
+The runner remains valuable for two genuine use cases:
 
-We can do the same thing locally + self-hosted by using
-`@storybook/test-runner` — Storybook's official Playwright-driven
-story runner. It ships its own Jest internally, doesn't touch the
-consumer's Vitest, and exposes `preVisit` / `postVisit` hooks
-designed for exactly this kind of plugin.
+1. **Vitest version decoupling.** Consumers pinned to old Vitest
+   versions (e.g. Vitest 1.x, or 2.x with Storybook 8.5 compat
+   requirements) may not be able to upgrade to whatever Vitest qlip's
+   peer dep currently spans. The runner ships its own Jest internally
+   via `@storybook/test-runner` and doesn't touch the consumer's
+   Vitest at all.
 
-The Vitest plugin stays. It's still the fastest path for greenfield
-projects on the latest Vitest (stories run as Vitest tests, no extra
-process). The runner is the **compatibility path** for everyone else.
+2. **Test-runner-first projects.** Consumers already running
+   `@storybook/test-runner` for other reasons (a11y testing,
+   interaction testing, etc.) can drop in one extra `postVisit`
+   hook to gain qlip captures without adding a second test runner.
 
+Chromatic uses this same architecture — capture decoupled from the
+consumer's test runner, driven by their own Playwright. Argos uses an
+even tighter version: a library that the consumer wires into their
+*own* `@storybook/test-runner` setup. We support both shapes:
+`qlip-serve-and-test` CLI (Chromatic-style — qlip owns the process)
+and `qlipCapture()` library export (Argos-style — consumer owns the
+process).
+
+The Vitest plugin remains the default for greenfield projects on
+current Vitest. The runner is a sibling, not a successor.
+
+<!-- Decision: see PROGRESS.md 2026-05-25 — Vitest plugin path saved on qorus-ide via pool: 'forks' + maxForks: 3 -->
 <!-- Decision: see PROGRESS.md 2026-05-22 — Standalone runner direction -->
 
 ---
