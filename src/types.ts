@@ -89,7 +89,16 @@ export interface QlipScreenshotOptions extends QlipCaptureOptions {
 export interface QlipStoryContext {
   id?: string;
   title?: string;
+  /**
+   * The story's human-friendly name. Storybook's `composeStory()`
+   * sets this as `storyName` on the result (the `name` property is
+   * the underlying function name — usually a bundler tag like
+   * `"storyFn"` — and is NOT the story name). We accept both so the
+   * runtime works with whichever shape the consumer's context
+   * carries.
+   */
   name?: string;
+  storyName?: string;
   parameters?: { qlip?: QlipParameters };
 }
 
