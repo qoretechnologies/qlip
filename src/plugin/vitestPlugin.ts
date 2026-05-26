@@ -183,6 +183,18 @@ export const qlipVitestPlugin = (
       }
       globalSetupFiles.add(globalSetupFile);
 
+      // Path to qlip's own package root, computed from this file's
+      // URL. Used to add ourselves to vite's `server.fs.allow` so the
+      // browser-mode runtime can fetch our `runtime/setup.js` even
+      // when qlip is installed via `link:` (outside the consumer's
+      // project root). Without this, link:-installed qlip fails at
+      // startup with "Failed to fetch dynamically imported module:
+      // .../qlip/dist/runtime/setup.js" — vite serves the URL with
+      // a 403 because the absolute path is outside the allowlist.
+      // npm-installed qlip lives under node_modules and is already
+      // allowed by default; this is a no-op there.
+      const qlipPackageRoot = fileURLToPath(new URL('../..', import.meta.url));
+
       return {
         // Vitest browser mode's `commands.writeFile` enforces vite's
         // `server.fs.allow` allowlist before writing. When the output
@@ -193,7 +205,7 @@ export const qlipVitestPlugin = (
         // written from inside the browser.
         server: {
           fs: {
-            allow: [resolvedOutputDir],
+            allow: [resolvedOutputDir, qlipPackageRoot],
           },
         },
         define: {
