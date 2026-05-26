@@ -378,6 +378,49 @@ describe('screenshot capture', () => {
   // with a clickable-link preamble wrapped in colour escapes. The
   // manifest stores raw bytes; the dashboard renders text. Strip at
   // the qlip boundary so what's stored is what gets shown.
+  // Mirrors the auto-capture coverage at "recovers when storyName is
+  // missing and only the function name 'storyFn' is available" — error
+  // captures need the same fallback chain so a failing play function
+  // doesn't land with storyTitle=undefined/storyName='storyFn' in the
+  // FailureCollection surface. Tracked in the 2026-05-25 PROGRESS.md
+  // decision-log entry under follow-ups.
+  it('error capture derives storyTitle / storyName from storyId when composedStory hides them', async () => {
+    const { page } = await import('@vitest/browser/context');
+    page.screenshot.mockResolvedValue('ok');
+    globalThis.__QLIP_CONFIG__ = {
+      ...runtimeConfig,
+      defaults: { ...runtimeConfig.defaults, captureOnError: true },
+    };
+
+    // Worst case: addon-vitest hands us a composedStory whose only
+    // usable signal is the storyId. task.name and ctx.story.name are
+    // bundler tags. Suite name is empty. The runtime must still
+    // recover human-readable title + name from the storyId itself.
+    const composedStory = Object.assign(function storyFn() {}, {
+      id: 'fields-service-webhooks--new-webhook-can-be-added',
+    });
+
+    await captureErrorScreenshot({
+      task: {
+        meta: { storyId: 'fields-service-webhooks--new-webhook-can-be-added' },
+        name: 'storyFn',
+        result: {
+          errors: [
+            { message: 'expected card to be visible', stack: 'at play (x.ts:1)' },
+          ],
+        },
+      },
+      story: composedStory as never,
+    } as never);
+
+    const entry = getRuntimeState()?.manifest.entries[0];
+    expect(entry?.kind).toBe('error');
+    expect(entry?.storyId).toBe('fields-service-webhooks--new-webhook-can-be-added');
+    expect(entry?.storyTitle).toBe('Fields/Service/Webhooks');
+    expect(entry?.storyName).toBe('New Webhook Can Be Added');
+    expect(entry?.error?.message).toBe('expected card to be visible');
+  });
+
   it('strips ANSI escape sequences from error message and stack', async () => {
     const { page } = await import('@vitest/browser/context');
     page.screenshot.mockResolvedValue('ok');
