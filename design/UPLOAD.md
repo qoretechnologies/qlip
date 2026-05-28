@@ -62,6 +62,16 @@ If `uploadToken` is set, the request carries
 `Authorization: Bearer <uploadToken>`. The server fail-closes on
 mismatch when its own `UPLOAD_TOKEN` env var is non-empty.
 
+`uploadToken` may be **either** a per-project token minted from the
+dashboard (`qlt_…`; scoped to one project — uploads to a different
+`project` field 403) **or** the server's env-pinned super-admin
+`UPLOAD_TOKEN` value (uploads to any project). qlip forwards the
+string verbatim and doesn't distinguish them; the scope check is
+entirely server-side. Prefer the narrowest token that works — a
+per-project token for a single-project CI. See the qlip-server
+`design/API.md §0` auth model + `§18` token CRUD, and the
+"Authenticating uploads" section of this repo's `README.md`.
+
 ### Why field-name-encoding for the path
 
 A given build may have multiple screenshots whose basenames collide

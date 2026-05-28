@@ -34,6 +34,13 @@ export interface QlipUploadOptions {
   /**
    * Bearer token, required by the server when UPLOAD_TOKEN is set.
    * Omit for unauthenticated dev servers.
+   *
+   * May be either a per-project token minted from the dashboard
+   * (`qlt_…`, scoped to one project) or the server's super-admin
+   * `UPLOAD_TOKEN` value (any project). Forwarded verbatim as
+   * `Authorization: Bearer <token>`; scope is enforced server-side.
+   * Prefer the narrowest token that works. See the README's
+   * "Authenticating uploads" section.
    */
   uploadToken?: string;
   /** Project name to upload under. Defaults to "default". */

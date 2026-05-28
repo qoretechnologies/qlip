@@ -107,6 +107,44 @@ Flags worth knowing:
 
 `qlip-serve-and-test --help` for the full list.
 
+## Authenticating uploads
+
+When the qlip-server is started with `UPLOAD_TOKEN` set, every
+upload must carry `Authorization: Bearer <token>`. Both integration
+paths read this token from the **`QLIP_UPLOAD_TOKEN`** env var (the
+Vitest plugin via `vitest.config.ts`, the runner CLIs via the same
+env or an explicit `--token` flag). Against a localhost dev server
+with `UPLOAD_TOKEN` unset, leave it blank — uploads are accepted
+without a header.
+
+There are **two kinds of token** you can put in `QLIP_UPLOAD_TOKEN`,
+and qlip treats them identically — it just forwards the string as a
+bearer. The difference is server-side scope:
+
+| Token | Looks like | Scope | When to use |
+|-------|-----------|-------|-------------|
+| **Per-project** (recommended) | `qlt_…` (44 chars) | Exactly one project; uploads to any other project 403 | CI pipelines. Mint one per project from the dashboard's **Project settings → API tokens**; revoke it without disrupting other projects. |
+| **Super-admin** (`UPLOAD_TOKEN`) | whatever you set the env to | Every project, all scopes | Bootstrapping, or a single shared CI that uploads to many projects. The legacy/escape-hatch token; keep it secret. |
+
+Precedence is simple because qlip only sends one token: whatever
+value is in `QLIP_UPLOAD_TOKEN` (or `--token`) is the one used. Pick
+the **narrowest token that works** — a per-project `qlt_…` token for
+a single-project CI, the super-admin token only when one uploader
+genuinely spans projects. A per-project token must match the
+`QLIP_PROJECT` you're uploading to, or the server returns `403`.
+
+```bash
+# CI uploading to one project — scoped per-project token:
+QLIP_UPLOAD_URL=https://qlip.example.com \
+QLIP_PROJECT=my-app \
+QLIP_UPLOAD_TOKEN=qlt_xxxxxxxx… \
+yarn test
+```
+
+See `qlip-server`'s `design/API.md §0` (auth model) and `§18`
+(token CRUD) for the server side, and `design/UPLOAD.md` here for
+the upload protocol.
+
 ## Manual screenshots inside play
 
 Use the existing **"Logged In"** story as a real-world example:
