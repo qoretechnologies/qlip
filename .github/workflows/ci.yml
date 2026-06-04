@@ -1,0 +1,30 @@
+name: CI
+
+# Lint + typecheck + unit tests for the working branch. qlip is a
+# published npm package — this is CI ONLY: no deploy, no publish.
+#
+# Scope is deliberately limited to feature/mvp so it does NOT double-run
+# with pr.yml (which already covers PRs to main/develop, including the
+# heavier Storybook browser tests) or beta-release.yml (publish on
+# develop). `npm run precheck` = lint + typecheck + unit tests.
+on:
+  push:
+    branches: [feature/mvp]
+  pull_request:
+    branches: [feature/mvp]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  precheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run precheck
