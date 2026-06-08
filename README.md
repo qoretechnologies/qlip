@@ -1,11 +1,26 @@
 # Qlip
 
-Qlip is a Storybook screenshot capture tool that plugs into the Storybook Vitest addon. Add one Vitest plugin and every story automatically gets a screenshot after the test finishes. Use `screenshot()` inside a play function to capture intermediate states.
+Qlip is a Storybook screenshot capture tool. Add it to your project and every story automatically gets a screenshot after its test finishes. Use `screenshot()` inside a play function to capture intermediate states.
+
+## Choosing your integration
+
+Qlip ships **two integration paths**. They produce identical screenshot bundles and upload to the same server — pick by tooling preference, not project size.
+
+| Your situation | Path | Why |
+|---|---|---|
+| Greenfield, ≤150 stories | **Vitest plugin** (default config) | One extra dep. Screenshots happen as a side effect of `yarn test:stories`. |
+| 150+ stories / heavy components | **Vitest plugin (memory-safe config)** | Add `pool: 'forks' + maxForks: N` — see [Memory-safe config](#memory-safe-config-for-large-storybooks). |
+| Can't be on Vitest 4 / want zero-Vitest capture | **Runner** (`qlip-serve-and-test`) | Decoupled from consumer's Vitest version. |
+| Already running `@storybook/test-runner` | **Runner** | Add one `postVisit` hook to the test-runner you already have. |
+
+The full comparison + when-to-switch guide is in [`design/INTEGRATION_PATHS.md`](./design/INTEGRATION_PATHS.md). The runner architecture is in [`design/RUNNER.md`](./design/RUNNER.md).
 
 ## Install
 
 ```bash
 npm install --save-dev @qoretechnologies/qlip
+# Plus, only for the runner path:
+npm install --save-dev @storybook/test-runner
 ```
 
 ## Vitest setup
@@ -49,6 +64,86 @@ export default defineConfig({
   },
 });
 ```
+
+## Runner setup (for large Storybooks)
+
+Use this **instead of** the Vitest plugin if your suite is past the
+Vitest-browser-mode memory envelope (see [Choosing your integration](#choosing-your-integration)
+above).
+
+1. Add `.storybook/test-runner.ts`:
+
+```ts
+import type { TestRunnerConfig } from '@storybook/test-runner';
+import { getStoryContext } from '@storybook/test-runner';
+import { qlipCapture } from '@qoretechnologies/qlip/test-runner';
+
+const config: TestRunnerConfig = {
+  async postVisit(page, context) {
+    await qlipCapture(page, context, { getStoryContext });
+  },
+};
+export default config;
+```
+
+2. Run it:
+
+```bash
+# Build storybook, serve it on a free port, capture every story
+# through @storybook/test-runner, upload as one build:
+yarn build-storybook
+QLIP_UPLOAD_URL=https://qlip.example.com \
+QLIP_PROJECT=my-app \
+yarn qlip-serve-and-test --shards 8 --continue-on-failure
+```
+
+Flags worth knowing:
+
+- `--shards <n>` — run N test-storybook invocations sequentially with `--shard k/N`. Each shard is a fresh subprocess; memory resets between shards. Default `1`.
+- `--continue-on-failure` — don't stop the loop on a non-zero shard exit. Right default for visual-regression demos where a failed play function doesn't invalidate the captured screenshot.
+- `--storybook-static <dir>` — point at an existing static Storybook dir (default `./storybook-static`).
+- `--url <url>` — skip the static server, capture against an already-running Storybook.
+- Anything after `--` is forwarded to `test-storybook` (e.g. `-- --maxWorkers 2`).
+
+`qlip-serve-and-test --help` for the full list.
+
+## Authenticating uploads
+
+When the qlip-server is started with `UPLOAD_TOKEN` set, every
+upload must carry `Authorization: Bearer <token>`. Both integration
+paths read this token from the **`QLIP_UPLOAD_TOKEN`** env var (the
+Vitest plugin via `vitest.config.ts`, the runner CLIs via the same
+env or an explicit `--token` flag). Against a localhost dev server
+with `UPLOAD_TOKEN` unset, leave it blank — uploads are accepted
+without a header.
+
+There are **two kinds of token** you can put in `QLIP_UPLOAD_TOKEN`,
+and qlip treats them identically — it just forwards the string as a
+bearer. The difference is server-side scope:
+
+| Token | Looks like | Scope | When to use |
+|-------|-----------|-------|-------------|
+| **Per-project** (recommended) | `qlt_…` (44 chars) | Exactly one project; uploads to any other project 403 | CI pipelines. Mint one per project from the dashboard's **Project settings → API tokens**; revoke it without disrupting other projects. |
+| **Super-admin** (`UPLOAD_TOKEN`) | whatever you set the env to | Every project, all scopes | Bootstrapping, or a single shared CI that uploads to many projects. The legacy/escape-hatch token; keep it secret. |
+
+Precedence is simple because qlip only sends one token: whatever
+value is in `QLIP_UPLOAD_TOKEN` (or `--token`) is the one used. Pick
+the **narrowest token that works** — a per-project `qlt_…` token for
+a single-project CI, the super-admin token only when one uploader
+genuinely spans projects. A per-project token must match the
+`QLIP_PROJECT` you're uploading to, or the server returns `403`.
+
+```bash
+# CI uploading to one project — scoped per-project token:
+QLIP_UPLOAD_URL=https://qlip.example.com \
+QLIP_PROJECT=my-app \
+QLIP_UPLOAD_TOKEN=qlt_xxxxxxxx… \
+yarn test
+```
+
+See `qlip-server`'s `design/API.md §0` (auth model) and `§18`
+(token CRUD) for the server side, and `design/UPLOAD.md` here for
+the upload protocol.
 
 ## Manual screenshots inside play
 
@@ -110,6 +205,36 @@ qlipVitestPlugin({
 `waitForIdleMs` waits for DOM mutations to settle before taking a screenshot. This is especially useful for animation libraries like `react-spring` that update inline styles via `requestAnimationFrame`, which bypasses CSS-based animation disabling. Increase it if you still catch mid-transition frames, or lower it for faster runs when your UI is static. `maxWaitForIdleMs` caps the wait so stories with continuously changing UI still complete.
 
 `ignoreElements` lets you provide CSS selectors to mask before capture. Qlip draws solid overlays on matching elements so layout stays intact while visual diffs ignore those regions.
+
+## Memory-safe config for large Storybooks
+
+If your Storybook has more than ~150 stories, or any stories that mount a heavy app shell (dashboards, multi-pane editors, etc.), the **default Vitest browser-mode** can OOM — it spawns one worker per CPU core, each with its own BrowserContext, and on a 12-core machine that's easily 20+ GB peak RAM.
+
+The fix is **two extra lines** in your storybook project's test config — switch the pool to forks and cap concurrency:
+
+```ts
+test: {
+  name: 'storybook',
+  browser: { enabled: true, headless: true, provider: playwright({}), instances: [{ browser: 'chromium' }] },
+  // ↓ The memory-safe knobs ↓
+  pool: 'forks',
+  poolOptions: {
+    forks: { maxForks: 3, minForks: 1, isolate: true },
+  },
+  setupFiles: ['.storybook/vitest.setup.ts'],
+}
+```
+
+Each fork peaks at ~3 GB RSS during a heavy story's chromium render, so the rule of thumb is `maxForks ≤ (free_RAM_GB - 4) / 3`:
+
+| Environment | Suggested `maxForks` |
+|---|---|
+| GitHub Actions Linux runner (~7 GB) | 1 |
+| 16 GB Mac (M1/M2 base) | 2 |
+| 24 GB Mac (M4 Pro / M3 Pro) | 3 |
+| 32 GB+ workstation | 4–6 |
+
+Verified on a real consumer (qorus-ide, 90 story files / 643 tests, Vitest 2.1.9, Storybook 8.5): **7 min wall time, 7.9 GB peak RSS, full suite completed with no OOM**. Full background in [`design/INTEGRATION_PATHS.md`](./design/INTEGRATION_PATHS.md#memory-safe-config-for-large-storybooks).
 
 ## Output layout
 

@@ -20,7 +20,12 @@ export const CaptureOnTestFailure: Story = {
   parameters: {
     qlip: {
       captureOnError: true,
-      // To test error screenshot capture, temporarily set skip to false
+      // Skipped by default so the deliberately-failing play function
+      // doesn't break CI. End-to-end was validated against a local
+      // qlip-server on 2026-05-24 (PROGRESS.md decision log entry
+      // "Error-capture end-to-end"). To re-test: set skip=false +
+      // run `QLIP_UPLOAD_URL=http://localhost:3100 yarn vitest run
+      // --project storybook src/stories/FailOnPurpose.stories.ts`.
       skip: true,
     },
   },

@@ -5,6 +5,14 @@ export const TOOL_NAME = 'qlip';
 export const DEFAULT_OUTPUT_DIR = './qlip/screenshots';
 export const AUTO_ERROR_SCREENSHOT_BASE = 'qlip-auto-error-capture';
 export const DEFAULT_VIEWPORT = { width: 1280, height: 720 };
+/**
+ * Per-browser-context manifest fragments live in this subdirectory of
+ * the build dir. The Node-side merger in `src/upload/manifest.ts`
+ * consolidates them into the final `manifest.json` once tests are
+ * done. Defined here (not in upload/) so the browser runtime can
+ * reference it without pulling node:fs/path into the browser bundle.
+ */
+export const MANIFEST_FRAGMENT_DIR = 'manifest-fragments';
 
 export const generateBuildId = (date: Date = new Date()): string => {
   const pad = (num: number): string => String(num).padStart(2, '0');

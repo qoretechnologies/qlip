@@ -1,0 +1,23 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "outDir": "dist-cjs",
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false
+  },
+  "include": ["src/test-runner", "src/config", "src/fs", "src/upload", "src/types.ts"],
+  "exclude": [
+    "dist",
+    "dist-cjs",
+    "node_modules",
+    "tests",
+    "src/plugin",
+    "src/runtime",
+    "src/stories",
+    "src/browser.ts",
+    "src/index.ts"
+  ]
+}

@@ -8,6 +8,7 @@ import {
 import { resolveQlipOptions } from '../config/parameters.js';
 import {
   AUTO_ERROR_SCREENSHOT_BASE,
+  MANIFEST_FRAGMENT_DIR,
   buildAutoLogPath,
   buildAutoScreenshotPath,
   buildManualLogPath,
@@ -26,6 +27,39 @@ import {
 import type { TestContext } from 'vitest';
 import type { QlipParameters, QlipManifestEntry } from '../types.js';
 
+/**
+ * Each browser context writes its in-memory manifest to a unique
+ * fragment file under `<buildDir>/manifest-fragments/<fragmentId>.json`.
+ * The Node-side `mergeManifestFragments` (in `src/upload/manifest.ts`)
+ * consolidates all fragments into the final `manifest.json` once Vitest
+ * signals end-of-run. Writing the full manifest each time is fine —
+ * fragments are tiny JSON and there's only one writer per file.
+ *
+ * Background: vitest browser-mode runs each `*.stories.tsx` in its
+ * own browser context with its own module graph and its own
+ * QlipRuntimeState. If they all wrote to a shared `manifest.json` the
+ * writes would clobber each other — last test file wins, earlier
+ * files' entries get stranded on disk.
+ */
+type WriteFileCommand = (
+  path: string,
+  data: string,
+  encoding: 'utf-8',
+) => Promise<unknown>;
+
+const writeManifestFragment = async (
+  commands: { writeFile: WriteFileCommand },
+  buildDir: string,
+  fragmentId: string,
+  manifest: unknown,
+): Promise<void> => {
+  await commands.writeFile(
+    joinPath(buildDir, MANIFEST_FRAGMENT_DIR, `${fragmentId}.json`),
+    JSON.stringify(manifest, null, 2),
+    'utf-8',
+  );
+};
+
 const ensureBrowserContext = async () => {
   if (!globalThis.__vitest_browser__) {
     throw new Error(
@@ -42,14 +76,98 @@ const ensureBrowserContext = async () => {
   return { page, commands };
 };
 
+/**
+ * Convert Storybook's PascalCase / camelCase export-name convention
+ * into the spaced Title Case Storybook itself uses for display
+ * (e.g. `MultipleSubscriptionsUser` → `Multiple Subscriptions User`).
+ * Mirrors the behaviour of `storyNameFromExport` in
+ * `@storybook/csf` — kept in qlip so the manifest carries
+ * display-ready names without forcing every consumer of the manifest
+ * to depend on the Storybook package just for this transform.
+ *
+ * Acronym runs stay grouped (`SVGToPNG` → `SVG To PNG`) and numbers
+ * stick to the preceding letters (`HTML5` → `HTML5`).
+ */
+const humanizeExportName = (exportName: string): string => {
+  if (!exportName) return exportName;
+  // Insert a space between a lowercase/digit and an uppercase letter,
+  // and between an uppercase letter and the next uppercase + lowercase
+  // run (handles acronyms like `SVGToPNG`).
+  return exportName
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z])([A-Z][a-z])/g, '$1 $2')
+    .replace(/_/g, ' ')
+    .trim();
+};
+
 const resolveStoryInfo = (ctx: QlipStoryContext) => {
   const storyId = ctx.id ? String(ctx.id) : '';
+  // Storybook 8.x's `composeStory()` returns a callable whose `.name`
+  // property is the underlying function name (a bundler tag like
+  // `"storyFn"`, NOT the story name). The actual story name is on
+  // `.storyName`. addon-vitest assigns the whole composedStory to
+  // `context.story`, so we prefer storyName here and fall back to
+  // `name` only for older shapes / runners that pass a plain object.
+  //
+  // The value coming in is typically the PascalCase export name —
+  // run it through `humanizeExportName` so the manifest carries the
+  // spaced version Storybook itself displays.
+  const rawName = ctx.storyName ?? ctx.name;
+  // Humanize the export name UNLESS it's a known function-name tag
+  // ("storyFn", "unboundStoryFn", ""). If we humanized "storyFn" to
+  // "Story Fn" we'd defeat the downstream `isFunctionNameTag` guard
+  // that uses these literal strings to recognise the bug-shape and
+  // fall through to storyId-derived recovery.
+  const humanizedName =
+    rawName && !FUNCTION_NAME_TAGS.has(rawName)
+      ? humanizeExportName(rawName)
+      : rawName;
   return {
     id: storyId,
     title: ctx.title,
-    name: ctx.name,
+    name: humanizedName,
     parameters: ctx.parameters?.qlip,
   };
+};
+
+/**
+ * Best-effort derivation of `storyTitle` and `storyName` from the
+ * Storybook story id (`<kebab-title>--<kebab-name>`). Used as the
+ * final fallback when `composeStory()`'s result hides the title (it
+ * does in current Storybook) and neither `__STORYBOOK_PREVIEW__` nor
+ * `ctx.task.suite.name` is populated (vitest browser mode via
+ * addon-vitest).
+ *
+ * Kebab → title-cased segments joined with `/` for the title (since
+ * Storybook IDs encode the title path's `/` separator as `-` after
+ * kebab-casing). Multi-word component names like `TestDefinitionPanel`
+ * collapse to `Test/Definition/Panel` — there's no structural signal
+ * in the id alone to distinguish "deeper path" from "multi-word name".
+ * Accept the minor cosmetic loss in exchange for usable groupings.
+ */
+const deriveTitleNameFromStoryId = (
+  storyId: string,
+): { title: string | undefined; name: string | undefined } => {
+  if (!storyId || !storyId.includes('--')) {
+    return { title: undefined, name: undefined };
+  }
+  const [titleKebab, nameKebab] = storyId.split('--', 2);
+  const capitalize = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+  const title = titleKebab
+    ? titleKebab
+        .split('-')
+        .filter((seg) => seg.length > 0)
+        .map(capitalize)
+        .join('/')
+    : undefined;
+  const name = nameKebab
+    ? nameKebab
+        .split('-')
+        .filter((seg) => seg.length > 0)
+        .map(capitalize)
+        .join(' ')
+    : undefined;
+  return { title: title || undefined, name: name || undefined };
 };
 
 const readStoryFromStore = (storyId: string) => {
@@ -306,11 +424,20 @@ const captureScreenshot = async ({
   story,
   screenshotName,
   options,
+  testError,
 }: {
   kind: QlipEntryKind;
   story: ReturnType<typeof resolveStoryInfo>;
   screenshotName?: string;
   options?: QlipScreenshotOptions;
+  /**
+   * For `kind: 'error'` captures, the originating test failure that
+   * triggered this screenshot. Stored on the manifest entry's
+   * `error` field even when the screenshot itself captures
+   * successfully — so reviewers see *why* the test failed, not just
+   * the post-failure DOM.
+   */
+  testError?: { message: string; stack?: string } | null;
 }) => {
   const runtime = initRuntimeState();
   if (!runtime) {
@@ -337,12 +464,26 @@ const captureScreenshot = async ({
     override: options,
   });
 
+  // Name conventions:
+  //   - 'auto'   → fixed 'auto'
+  //   - 'manual' → user-supplied or auto-numbered ('step-1'…)
+  //   - 'error'  → 'qlip-auto-error-capture' (or '-2', '-3' for
+  //                multiple errors on the same story). The
+  //                `qlip-auto-error-capture` prefix is what the
+  //                fs/output layer keys off to route to `error/`.
   const name =
     kind === 'manual'
       ? sanitizeSegment(screenshotName ?? nextStepName(runtime, story.id))
-      : 'auto';
+      : kind === 'error'
+        ? sanitizeSegment(screenshotName ?? AUTO_ERROR_SCREENSHOT_BASE)
+        : 'auto';
 
   const captureStart = Date.now();
+
+  // `kind: 'error'` shares the manual path resolver — the helper
+  // detects the `qlip-auto-error-capture` prefix on the screenshot
+  // name and routes to the `error/` subtree automatically.
+  const usesNamedPath = kind === 'manual' || kind === 'error';
 
   if (resolved.skip) {
     flushConsoleLogs(runtime);
@@ -354,24 +495,23 @@ const captureScreenshot = async ({
         storyTitle: story.title,
         storyName: story.name,
         screenshotName: name,
-        relativePath:
-          kind === 'manual'
-            ? buildManualScreenshotPath({
-                buildDir: runtime.config.buildDir,
-                storyId: story.id,
-                storyTitle: story.title,
-                storyName: story.name,
-                screenshotName: name,
-              }).relativePath
-            : buildAutoScreenshotPath({
-                buildDir: runtime.config.buildDir,
-                storyId: story.id,
-                storyTitle: story.title,
-                storyName: story.name,
-              }).relativePath,
+        relativePath: usesNamedPath
+          ? buildManualScreenshotPath({
+              buildDir: runtime.config.buildDir,
+              storyId: story.id,
+              storyTitle: story.title,
+              storyName: story.name,
+              screenshotName: name,
+            }).relativePath
+          : buildAutoScreenshotPath({
+              buildDir: runtime.config.buildDir,
+              storyId: story.id,
+              storyTitle: story.title,
+              storyName: story.name,
+            }).relativePath,
         viewport: resolved.viewport,
         status: 'skipped',
-        error: null,
+        error: testError ?? null,
         timingsMs: Date.now() - captureStart,
       }),
     );
@@ -382,17 +522,18 @@ const captureScreenshot = async ({
           : runtime.manifest.stats.storiesTotal,
       skipped: runtime.manifest.stats.skipped + 1,
     });
-    await commands.writeFile(
-      joinPath(runtime.config.buildDir, 'manifest.json'),
-      JSON.stringify(runtime.manifest, null, 2),
-      'utf-8',
+    await writeManifestFragment(
+      commands,
+      runtime.config.buildDir,
+      runtime.fragmentId,
+      runtime.manifest,
     );
     return;
   }
 
   let relativePath = '';
   let absolutePath = '';
-  if (kind === 'manual') {
+  if (usesNamedPath) {
     const pathInfo = buildManualScreenshotPath({
       buildDir: runtime.config.buildDir,
       storyId: story.id,
@@ -414,7 +555,11 @@ const captureScreenshot = async ({
   }
 
   let status: QlipEntryStatus = 'captured';
-  let error: { message: string; stack?: string } | null = null;
+  // Pre-seed `error` with the originating test failure (if any) so
+  // it survives a successful capture; the catch block below
+  // overwrites with the *capture* error if the PNG write itself
+  // throws.
+  let error: { message: string; stack?: string } | null = testError ?? null;
   let cleanupMasks: (() => void) | null = null;
   try {
     await page.viewport(resolved.viewport.width, resolved.viewport.height);
@@ -441,21 +586,20 @@ const captureScreenshot = async ({
   const flushed = flushConsoleLogs(runtime);
   let logsPath: string | undefined;
   if (resolved.captureConsole && flushed.length > 0) {
-    const logPathInfo =
-      kind === 'manual'
-        ? buildManualLogPath({
-            buildDir: runtime.config.buildDir,
-            storyId: story.id,
-            storyTitle: story.title,
-            storyName: story.name,
-            screenshotName: name,
-          })
-        : buildAutoLogPath({
-            buildDir: runtime.config.buildDir,
-            storyId: story.id,
-            storyTitle: story.title,
-            storyName: story.name,
-          });
+    const logPathInfo = usesNamedPath
+      ? buildManualLogPath({
+          buildDir: runtime.config.buildDir,
+          storyId: story.id,
+          storyTitle: story.title,
+          storyName: story.name,
+          screenshotName: name,
+        })
+      : buildAutoLogPath({
+          buildDir: runtime.config.buildDir,
+          storyId: story.id,
+          storyTitle: story.title,
+          storyName: story.name,
+        });
     logsPath = logPathInfo.relativePath;
     await commands.writeFile(
       logPathInfo.absolutePath,
@@ -491,6 +635,20 @@ const captureScreenshot = async ({
           ? runtime.manifest.stats.failed + 1
           : runtime.manifest.stats.failed,
     });
+  } else if (kind === 'error') {
+    // Error captures don't bump `storiesTotal` (the matching auto
+    // entry already did) and don't count toward `capturedManual`
+    // (they're not user-initiated `screenshot()` calls). They DO
+    // bump `failed` so the build-level failed counter reflects
+    // story test failures even when the auto capture happened to
+    // succeed. The server filters error-kind entries to render the
+    // dedicated "Failures" surface.
+    updateStats(runtime, {
+      failed:
+        status === 'captured' || status === 'failed'
+          ? runtime.manifest.stats.failed + 1
+          : runtime.manifest.stats.failed,
+    });
   } else {
     updateStats(runtime, {
       capturedManual:
@@ -504,10 +662,11 @@ const captureScreenshot = async ({
     });
   }
 
-  await commands.writeFile(
-    joinPath(runtime.config.buildDir, 'manifest.json'),
-    JSON.stringify(runtime.manifest, null, 2),
-    'utf-8',
+  await writeManifestFragment(
+    commands,
+    runtime.config.buildDir,
+    runtime.fragmentId,
+    runtime.manifest,
   );
 };
 
@@ -544,6 +703,14 @@ export const screenshot = async (
 
 type QlipTestContext = TestContext & { story?: QlipStoryContext };
 
+// Heuristic: `name` values that came from a callable function's
+// `.name` property (bundler-tagged like `"storyFn"`) are not real
+// story names. Treat them as missing so the fallback chain can
+// recover from storyId. See `resolveStoryInfo` for context.
+const FUNCTION_NAME_TAGS = new Set(['storyFn', 'unboundStoryFn', '']);
+const isFunctionNameTag = (value: string | undefined): boolean =>
+  value === undefined || FUNCTION_NAME_TAGS.has(value);
+
 export const captureAutoScreenshot = async (ctx: QlipTestContext) => {
   const runtime = initRuntimeState();
   if (!runtime) {
@@ -570,11 +737,23 @@ export const captureAutoScreenshot = async (ctx: QlipTestContext) => {
       story.name = storeStory.name;
     }
   }
-  if (!story.name && ctx.task.name) {
+  if (isFunctionNameTag(story.name) && ctx.task.name) {
     story.name = ctx.task.name;
   }
   if (!story.title && ctx.task.suite?.name) {
     story.title = ctx.task.suite.name;
+  }
+  // Final fallback: derive from the storyId itself. Handles addon-vitest
+  // where `composeStory` hides the title and `__STORYBOOK_PREVIEW__`
+  // isn't initialized — see PROGRESS.md 2026-05-25.
+  if (story.id && (!story.title || isFunctionNameTag(story.name))) {
+    const derived = deriveTitleNameFromStoryId(story.id);
+    if (!story.title && derived.title) {
+      story.title = derived.title;
+    }
+    if (isFunctionNameTag(story.name) && derived.name) {
+      story.name = derived.name;
+    }
   }
   await captureScreenshot({
     kind: 'auto',
@@ -614,15 +793,77 @@ export const captureErrorScreenshot = async (ctx: QlipTestContext) => {
       story.name = storeStory.name;
     }
   }
-  if (!story.name && ctx.task.name) {
+  if (isFunctionNameTag(story.name) && ctx.task.name) {
     story.name = ctx.task.name;
   }
   if (!story.title && ctx.task.suite?.name) {
     story.title = ctx.task.suite.name;
   }
+  // Final fallback: derive from the storyId. Same logic as the auto
+  // path; the error capture inherits all the same context-shape
+  // limitations of addon-vitest.
+  if (story.id && (!story.title || isFunctionNameTag(story.name))) {
+    const derived = deriveTitleNameFromStoryId(story.id);
+    if (!story.title && derived.title) {
+      story.title = derived.title;
+    }
+    if (isFunctionNameTag(story.name) && derived.name) {
+      story.name = derived.name;
+    }
+  }
+  // Pull the originating test failure from Vitest's `task.result`
+  // shape so the manifest entry carries *why* the test failed, not
+  // just the post-failure DOM. Falls back to a generic marker if the
+  // shape isn't available (older Vitest, custom runner adapters).
+  const failureError = extractTestFailureError(ctx);
   await captureScreenshot({
-    kind: 'manual',
+    kind: 'error',
     story,
     screenshotName: pickUniqueErrorName(runtime.manifest.entries),
+    testError: failureError,
   });
+};
+
+/**
+ * Strip ANSI escape sequences (color codes, cursor moves, etc.) from a
+ * string. Storybook's `addon-vitest` setup-file decorates failures
+ * with a clickable-link preamble wrapped in ANSI color escapes
+ * (`\x1b[34m…\x1b[39m`), and Vitest's pretty-printer can wrap stacks
+ * with bold/dim sequences. The manifest stores raw bytes — leaving
+ * the escapes in produces noisy `[34m` literals in the dashboard's
+ * FailureCollection surface. Strip at the boundary so what's stored
+ * is what gets displayed.
+ */
+const ANSI_ESCAPE_RE = /\[[0-9;]*[A-Za-z]/g;
+const stripAnsi = (value: string): string =>
+  value.replace(ANSI_ESCAPE_RE, '');
+
+/**
+ * Pull the first failure-error from a Vitest task result. Vitest
+ * stores them as an array on `task.result.errors`; in practice
+ * the first entry is the one that actually fired. Returns null when
+ * the shape is missing so the manifest entry's `error` field stays
+ * null rather than carrying a misleading placeholder.
+ *
+ * Both `message` and `stack` are ANSI-stripped on the way out — they
+ * land in the manifest and the dashboard, neither of which renders
+ * terminal escape sequences.
+ */
+const extractTestFailureError = (
+  ctx: QlipTestContext,
+): { message: string; stack?: string } | null => {
+  const result = (ctx.task as { result?: { errors?: unknown } }).result;
+  if (!result || !Array.isArray(result.errors) || result.errors.length === 0) {
+    return null;
+  }
+  const first = result.errors[0] as
+    | { message?: unknown; stack?: unknown }
+    | undefined;
+  if (!first || typeof first.message !== 'string') {
+    return null;
+  }
+  return {
+    message: stripAnsi(first.message),
+    stack: typeof first.stack === 'string' ? stripAnsi(first.stack) : undefined,
+  };
 };
