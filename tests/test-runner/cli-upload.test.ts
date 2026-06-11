@@ -154,13 +154,20 @@ afterEach(async () => {
 });
 
 describe('runUpload', () => {
-  it('rejects with exit 1 when --server-url is missing', async () => {
+  it('falls back to the hosted default when --server-url is missing', async () => {
+    const buildDir = await seedBuildDir(tmpRoot, '20991231-235959');
     const log = vi.fn();
     const error = vi.fn();
-    const result = await runUpload([], {}, { log, error });
-    expect(result.exitCode).toBe(1);
-    expect(error).toHaveBeenCalledWith(
-      expect.stringContaining('--server-url or QLIP_UPLOAD_URL is required'),
+    const result = await runUpload(
+      [],
+      { QLIP_OUTPUT_DIR: tmpRoot },
+      { log, error },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.buildDir).toBe(buildDir);
+    expect(recordedRequests).toHaveLength(1);
+    expect(recordedRequests[0].url).toBe(
+      'https://qlip.qoretechnologies.com/api/builds/upload',
     );
   });
 

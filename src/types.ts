@@ -29,8 +29,14 @@ export interface QlipParameters extends QlipCaptureOptions {
  * See `design/UPLOAD.md` for the protocol details.
  */
 export interface QlipUploadOptions {
-  /** Base URL of the qlip-server (e.g. "http://localhost:3100"). */
-  serverUrl: string;
+  /**
+   * Base URL of the qlip-server (e.g. "http://localhost:3100" for a
+   * local dev server). Optional — when omitted, uploads go to the
+   * hosted Qore Technologies instance.
+   *
+   * @default 'https://qlip.qoretechnologies.com'
+   */
+  serverUrl?: string;
   /**
    * Bearer token, required by the server when UPLOAD_TOKEN is set.
    * Omit for unauthenticated dev servers.

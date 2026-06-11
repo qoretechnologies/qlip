@@ -296,3 +296,20 @@ describe('uploadBuild', () => {
     expect(calls[0]?.url).toBe('http://localhost:3100/api/builds/upload');
   });
 });
+
+describe('default server URL', () => {
+  it('uploads to the hosted instance when serverUrl is omitted', async () => {
+    workDir = await seedBuildDir(manifest());
+    const { fetchImpl, calls } = recordingFetch(
+      () => new Response('{}', { status: 201 }),
+    );
+    await uploadBuild({
+      buildDir: workDir,
+      options: {},
+      fetchImpl,
+    });
+    expect(calls[0]?.url).toBe(
+      'https://qlip.qoretechnologies.com/api/builds/upload',
+    );
+  });
+});

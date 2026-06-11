@@ -60,8 +60,8 @@ Options:
   --output-dir <path>         Root containing build dirs. Default:
                               \$QLIP_OUTPUT_DIR or ./qlip/screenshots
   --server-url <url>          qlip-server base URL. Default:
-                              \$QLIP_UPLOAD_URL (REQUIRED if not set
-                              via env).
+                              \$QLIP_UPLOAD_URL, falling back to
+                              https://qlip.qoretechnologies.com.
   --project <name>            Project name. Default: \$QLIP_PROJECT
                               or "default".
   --token <token>             Bearer token. Default: \$QLIP_UPLOAD_TOKEN.
@@ -182,13 +182,9 @@ export const runUpload = async (
     return { exitCode: 0 };
   }
 
+  // Optional since the hosted-instance default exists; an explicit
+  // --server-url / $QLIP_UPLOAD_URL still wins.
   const serverUrl = parsed.serverUrl ?? env['QLIP_UPLOAD_URL'];
-  if (!serverUrl) {
-    logger.error(
-      'qlip-upload: --server-url or QLIP_UPLOAD_URL is required',
-    );
-    return { exitCode: 1 };
-  }
 
   const outputDir = path.resolve(
     parsed.outputDir ?? env['QLIP_OUTPUT_DIR'] ?? DEFAULT_OUTPUT_DIR,
@@ -208,7 +204,7 @@ export const runUpload = async (
   const token = parsed.token ?? env['QLIP_UPLOAD_TOKEN'];
 
   const upload: QlipUploadOptions = {
-    serverUrl,
+    ...(serverUrl !== undefined && serverUrl !== '' ? { serverUrl } : {}),
     project,
     ...(token !== undefined && token !== '' ? { uploadToken: token } : {}),
     ...(parsed.branch !== undefined ? { branch: parsed.branch } : {}),

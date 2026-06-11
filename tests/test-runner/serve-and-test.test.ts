@@ -308,16 +308,18 @@ describe('runServeAndTest — upload trigger logic', () => {
     const error = vi.fn();
     const result = await runServeAndTest(
       ['--storybook-static', tmpRoot, '--upload'],
-      {},
+      { QLIP_OUTPUT_DIR: tmpRoot },
       { log, error },
       harness.spawn,
     );
 
-    // --upload forces, but QLIP_UPLOAD_URL is missing → upload
-    // step rejects with exit 1, which becomes the final exit.
-    expect(result.exitCode).toBe(1);
-    expect(error).toHaveBeenCalledWith(
-      expect.stringContaining('--server-url or QLIP_UPLOAD_URL is required'),
+    // A missing QLIP_UPLOAD_URL no longer aborts the upload step — the
+    // hosted default applies and the step runs in-process. With no
+    // manifest fragments in the pinned build dir it bails silently
+    // (before any network call), so the test runner's exit code wins.
+    expect(result.exitCode).toBe(0);
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining('running qlip-upload'),
     );
   });
 });

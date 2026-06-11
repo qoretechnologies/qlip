@@ -34,6 +34,21 @@ export interface QlipUploadInput {
   fetchImpl?: typeof fetch;
 }
 
+/**
+ * Default qlip-server when `upload.serverUrl` is omitted: the hosted
+ * Qore Technologies instance.
+ */
+export const DEFAULT_SERVER_URL = 'https://qlip.qoretechnologies.com';
+
+/**
+ * Resolve the effective server base URL (default applied, trailing
+ * slash stripped). Exported so log lines elsewhere report the same
+ * URL the upload actually hits.
+ */
+export const resolveServerUrl = (
+  options: Pick<QlipUploadOptions, 'serverUrl'>,
+): string => (options.serverUrl ?? DEFAULT_SERVER_URL).replace(/\/$/, '');
+
 export class QlipUploadError extends Error {
   readonly status: number;
   readonly responseBody: string;
@@ -93,7 +108,7 @@ export const uploadBuild = async (
   if (options.branch !== undefined) form.append('branch', options.branch);
   if (options.commit !== undefined) form.append('commit', options.commit);
 
-  const url = `${options.serverUrl.replace(/\/$/, '')}/api/builds/upload`;
+  const url = `${resolveServerUrl(options)}/api/builds/upload`;
   const headers: Record<string, string> = {};
   if (options.uploadToken !== undefined && options.uploadToken !== '') {
     headers['Authorization'] = `Bearer ${options.uploadToken}`;

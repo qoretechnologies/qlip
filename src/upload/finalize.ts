@@ -21,7 +21,7 @@
 import type { QlipRuntimeConfig, QlipUploadOptions } from '../types.js';
 import { autodetectBranch, autodetectCommit } from './autodetect.js';
 import { mergeManifestFragments } from './manifest.js';
-import { QlipUploadError, uploadBuild } from './upload.js';
+import { QlipUploadError, uploadBuild, resolveServerUrl } from './upload.js';
 
 const FINALIZE_FLAG = Symbol.for('@qoretechnologies/qlip/__finalized__');
 
@@ -84,7 +84,7 @@ export const finalizeBuild = async (
     // Single-line success log so CI output stays tidy.
     // eslint-disable-next-line no-console
     console.log(
-      `[qlip] uploaded build ${result.buildId} (${String(merged.fragmentCount)} fragment${merged.fragmentCount === 1 ? '' : 's'}, ${String(merged.manifest.entries.length)} entries) → ${opts.upload.serverUrl}`,
+      `[qlip] uploaded build ${result.buildId} (${String(merged.fragmentCount)} fragment${merged.fragmentCount === 1 ? '' : 's'}, ${String(merged.manifest.entries.length)} entries) → ${resolveServerUrl(resolved)}`,
     );
   } catch (err) {
     const message =
