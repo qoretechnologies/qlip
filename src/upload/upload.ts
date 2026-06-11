@@ -39,7 +39,11 @@ export class QlipUploadError extends Error {
   readonly responseBody: string;
 
   constructor(status: number, statusText: string, body: string) {
-    super(`qlip upload failed: ${String(status)} ${statusText} — ${body}`);
+    const hint =
+      status === 413
+        ? ' (the upload is one multipart request with every screenshot; a 413 usually means the reverse proxy in front of qlip-server caps the request body — e.g. nginx defaults to `client_max_body_size 1m`. Raise it well above your largest build.)'
+        : '';
+    super(`qlip upload failed: ${String(status)} ${statusText} — ${body}${hint}`);
     this.name = 'QlipUploadError';
     this.status = status;
     this.responseBody = body;

@@ -2,6 +2,7 @@ import { afterEach, beforeEach } from 'vitest';
 import { captureAutoScreenshot, captureErrorScreenshot } from './screenshot.js';
 import { flushConsoleLogs, getRuntimeState, initRuntimeState, pushConsoleLog } from './context.js';
 import type { QlipConsoleLevel } from '../types.js';
+import { realDateNow } from './clock.js';
 
 const isBrowser = () => typeof globalThis.__vitest_browser__ !== 'undefined';
 
@@ -58,7 +59,7 @@ const installConsoleInterceptors = () => {
 
       pushConsoleLog(
         currentState,
-        { level: level as QlipConsoleLevel, message, timestamp: Date.now() },
+        { level: level as QlipConsoleLevel, message, timestamp: realDateNow() },
         maxLogs,
       );
     };

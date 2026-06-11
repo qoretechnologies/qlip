@@ -7,6 +7,12 @@ import {
 } from '../types.js';
 import { resolveQlipOptions } from '../config/parameters.js';
 import {
+  monotonicNow,
+  realClearInterval,
+  realSetInterval,
+  realSetTimeout,
+} from './clock.js';
+import {
   AUTO_ERROR_SCREENSHOT_BASE,
   MANIFEST_FRAGMENT_DIR,
   buildAutoLogPath,
@@ -67,7 +73,13 @@ const ensureBrowserContext = async () => {
     );
   }
 
-  const { page, commands } = await import('@vitest/browser/context');
+  // Vitest 4 deprecated '@vitest/browser/context' in favour of
+  // 'vitest/browser'. Try the new module first and fall back for the
+  // Vitest 2/3 consumers we still support (see VITEST_2_COMPAT).
+  const browserModule = await import('vitest/browser').catch(
+    () => import('@vitest/browser/context'),
+  );
+  const { page, commands } = browserModule;
   if (!page || !commands) {
     throw new Error(
       '[qlip] Playwright page is unavailable. Ensure Storybook Vitest addon is enabled.',
@@ -279,14 +291,18 @@ const waitForDomIdle = async (idleMs: number, maxWaitMs: number) => {
 
   const doc = globalThis.document;
   if (!doc || typeof MutationObserver === 'undefined') {
-    await new Promise((resolve) => setTimeout(resolve, idleMs));
+    await new Promise((resolve) => realSetTimeout(resolve, idleMs));
     return;
   }
 
+  // Use the pristine clock + timers (see ./clock.ts): stories that mock
+  // the date (e.g. Storybook's `parameters.mockdate`) freeze `Date.now()`,
+  // which made this wait never observe elapsed time and spin until the
+  // afterEach hook timed out.
   await new Promise<void>((resolve) => {
-    const start = Date.now();
+    const start = monotonicNow();
     const resolvedMaxWait = Math.max(idleMs, maxWaitMs);
-    let lastChange = Date.now();
+    let lastChange = monotonicNow();
     let done = false;
 
     const finish = () => {
@@ -295,12 +311,12 @@ const waitForDomIdle = async (idleMs: number, maxWaitMs: number) => {
       }
       done = true;
       observer.disconnect();
-      clearInterval(checkInterval);
+      realClearInterval(checkInterval);
       resolve();
     };
 
     const observer = new MutationObserver(() => {
-      lastChange = Date.now();
+      lastChange = monotonicNow();
     });
 
     observer.observe(doc.documentElement, {
@@ -310,8 +326,8 @@ const waitForDomIdle = async (idleMs: number, maxWaitMs: number) => {
       characterData: true,
     });
 
-    const checkInterval = setInterval(() => {
-      const now = Date.now();
+    const checkInterval = realSetInterval(() => {
+      const now = monotonicNow();
       if (now - lastChange >= idleMs || now - start >= resolvedMaxWait) {
         finish();
       }
@@ -478,7 +494,7 @@ const captureScreenshot = async ({
         ? sanitizeSegment(screenshotName ?? AUTO_ERROR_SCREENSHOT_BASE)
         : 'auto';
 
-  const captureStart = Date.now();
+  const captureStart = monotonicNow();
 
   // `kind: 'error'` shares the manual path resolver — the helper
   // detects the `qlip-auto-error-capture` prefix on the screenshot
@@ -512,7 +528,7 @@ const captureScreenshot = async ({
         viewport: resolved.viewport,
         status: 'skipped',
         error: testError ?? null,
-        timingsMs: Date.now() - captureStart,
+        timingsMs: monotonicNow() - captureStart,
       }),
     );
     updateStats(runtime, {
@@ -618,7 +634,7 @@ const captureScreenshot = async ({
     viewport: resolved.viewport,
     status,
     error,
-    timingsMs: Date.now() - captureStart,
+    timingsMs: monotonicNow() - captureStart,
     logsPath,
   });
 

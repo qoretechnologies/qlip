@@ -5,6 +5,7 @@ import {
   QlipRuntimeConfig,
 } from '../types.js';
 import { createManifest } from '../fs/output.js';
+import { monotonicNow, realDateNow } from './clock.js';
 
 export interface QlipRuntimeState {
   config: QlipRuntimeConfig;
@@ -78,7 +79,7 @@ export const initRuntimeState = (): QlipRuntimeState | null => {
   // own process / module graph, so two contexts can't race here).
   // Math.random() alone would collide ~1 in 16M; with the millis
   // prefix that risk is gone.
-  const fragmentId = `${Date.now().toString(36)}-${Math.random()
+  const fragmentId = `${realDateNow().toString(36)}-${Math.random()
     .toString(36)
     .slice(2, 10)}`;
 
@@ -86,7 +87,7 @@ export const initRuntimeState = (): QlipRuntimeState | null => {
     config: runtimeConfig,
     manifest,
     counters: new Map(),
-    startedAt: Date.now(),
+    startedAt: monotonicNow(),
     warnedMissingStorybook: false,
     consoleLogs: [],
     fragmentId,
@@ -121,7 +122,7 @@ export const updateStats = (state: QlipRuntimeState, updates: Partial<QlipManife
     ...state.manifest.stats,
     ...updates,
   };
-  state.manifest.stats.durationMs = Date.now() - state.startedAt;
+  state.manifest.stats.durationMs = monotonicNow() - state.startedAt;
 };
 
 export const markStorybookWarning = (state: QlipRuntimeState) => {
