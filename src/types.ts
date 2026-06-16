@@ -61,6 +61,20 @@ export interface QlipUploadOptions {
    * `git rev-parse HEAD` when omitted.
    */
   commit?: string;
+  /**
+   * PR base branch (e.g. "develop"). Auto-detected from
+   * $GITHUB_BASE_REF (set only on PR builds) when omitted. On push
+   * builds it stays undefined and the server falls back to the
+   * project's default branch.
+   */
+  baseBranch?: string;
+  /**
+   * Commit SHAs from HEAD backward, nearest-first, capped at 100.
+   * Auto-detected via `git rev-list` when omitted. The server walks
+   * this list to resolve a visual baseline. Omitted (not sent) when
+   * git history is unavailable. See `design/UPLOAD.md`.
+   */
+  ancestorCommits?: string[];
   /** Skip upload entirely (handy for local-only runs). */
   disabled?: boolean;
   /**
@@ -152,6 +166,13 @@ export interface QlipManifestEntry {
   error: { message: string; stack?: string } | null;
   timings: { ms: number };
   logsPath?: string;
+  /**
+   * sha256 hex of the PNG (the blob key). Set by `uploadBuild` at send
+   * time, not persisted to the on-disk manifest. Absent on non-captured
+   * entries. See `qlip-server/design/UPLOAD.md §0`.
+   */
+  sha256?: string;
+  sizeBytes?: number;
 }
 
 export interface QlipManifest {

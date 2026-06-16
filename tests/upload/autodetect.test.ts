@@ -13,6 +13,8 @@ vi.mock('node:child_process', () => ({
 }));
 
 import {
+  autodetectAncestorCommits,
+  autodetectBaseBranch,
   autodetectBranch,
   autodetectCommit,
 } from '../../src/upload/autodetect.js';
@@ -22,12 +24,14 @@ const savedEnv = {
   GITHUB_HEAD_REF: process.env['GITHUB_HEAD_REF'],
   GITHUB_REF_NAME: process.env['GITHUB_REF_NAME'],
   GITHUB_SHA: process.env['GITHUB_SHA'],
+  GITHUB_BASE_REF: process.env['GITHUB_BASE_REF'],
 };
 
 beforeEach(() => {
   delete process.env['GITHUB_HEAD_REF'];
   delete process.env['GITHUB_REF_NAME'];
   delete process.env['GITHUB_SHA'];
+  delete process.env['GITHUB_BASE_REF'];
   execFileSyncMock.mockReset();
 });
 
@@ -76,5 +80,140 @@ describe('autodetectCommit', () => {
     expect(autodetectCommit()).toBe(
       '1234567890abcdef1234567890abcdef12345678',
     );
+  });
+});
+
+describe('autodetectBaseBranch', () => {
+  it('reads GITHUB_BASE_REF (set only on PR builds)', () => {
+    process.env['GITHUB_BASE_REF'] = 'develop';
+    expect(autodetectBaseBranch()).toBe('develop');
+    // No git equivalent — must never shell out for a base branch.
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('returns undefined when GITHUB_BASE_REF is unset (push builds)', () => {
+    expect(autodetectBaseBranch()).toBeUndefined();
+  });
+
+  it('treats an empty GITHUB_BASE_REF as absent', () => {
+    process.env['GITHUB_BASE_REF'] = '';
+    expect(autodetectBaseBranch()).toBeUndefined();
+  });
+});
+
+describe('autodetectAncestorCommits', () => {
+  // `git rev-parse --is-shallow-repository` runs first (shallow guard);
+  // a non-shallow repo returns "false". Then `git rev-list` runs. This
+  // helper scripts the mock to answer both in call order.
+  const scriptGit = (revList: string, isShallow = 'false'): void => {
+    execFileSyncMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args.includes('--is-shallow-repository')) return `${isShallow}\n`;
+      if (args[0] === 'rev-list') return revList;
+      return '';
+    });
+  };
+
+  it('parses rev-list output into a nearest-first SHA array', () => {
+    scriptGit('aaa111\nbbb222\nccc333\n');
+    expect(autodetectAncestorCommits()).toEqual(['aaa111', 'bbb222', 'ccc333']);
+  });
+
+  it('passes --max-count=100 to git so the ancestry is capped', () => {
+    scriptGit('aaa111\n');
+    autodetectAncestorCommits();
+    const revListCall = execFileSyncMock.mock.calls.find(
+      (call) => (call[1] as string[])[0] === 'rev-list',
+    );
+    expect(revListCall?.[1]).toEqual(['rev-list', '--max-count=100', 'HEAD']);
+  });
+
+  it('caps the returned list at 100 even if more lines come back', () => {
+    // Belt-and-suspenders: git already caps via --max-count, but make
+    // sure the parser never lets a longer list through.
+    const lines = Array.from({ length: 150 }, (_, i) => `sha${String(i)}`);
+    scriptGit(`${lines.join('\n')}\n`);
+    const result = autodetectAncestorCommits();
+    expect(result).toHaveLength(100);
+    expect(result?.[0]).toBe('sha0');
+  });
+
+  it('drops blank lines and trims surrounding whitespace', () => {
+    scriptGit('  aaa111  \n\n bbb222 \n');
+    expect(autodetectAncestorCommits()).toEqual(['aaa111', 'bbb222']);
+  });
+
+  it('returns undefined when git is unavailable', () => {
+    execFileSyncMock.mockImplementation(() => {
+      throw new Error('git: command not found');
+    });
+    expect(autodetectAncestorCommits()).toBeUndefined();
+  });
+
+  it('returns undefined when rev-list yields no commits', () => {
+    scriptGit('   \n  \n');
+    expect(autodetectAncestorCommits()).toBeUndefined();
+  });
+});
+
+describe('autodetectAncestorCommits — shallow clone', () => {
+  // The shallow warning is one-time per process via a module-level
+  // flag, so each test re-imports a fresh module copy to observe it.
+  const loadFresh = async (): Promise<
+    typeof import('../../src/upload/autodetect.js')
+  > => {
+    vi.resetModules();
+    return import('../../src/upload/autodetect.js');
+  };
+
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  it('warns about fetch-depth, still returns the available commits, never throws', async () => {
+    execFileSyncMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args.includes('--is-shallow-repository')) return 'true\n';
+      if (args[0] === 'rev-list') return 'tip111\n';
+      return '';
+    });
+
+    const mod = await loadFresh();
+    const result = mod.autodetectAncestorCommits();
+
+    expect(result).toEqual(['tip111']);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const warning = warnSpy.mock.calls[0]?.[0] as string;
+    expect(warning).toContain('fetch-depth: 0');
+    expect(warning).toContain('SHALLOW');
+  });
+
+  it('warns at most once even across repeated calls', async () => {
+    execFileSyncMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args.includes('--is-shallow-repository')) return 'true\n';
+      if (args[0] === 'rev-list') return 'tip111\n';
+      return '';
+    });
+
+    const mod = await loadFresh();
+    mod.autodetectAncestorCommits();
+    mod.autodetectAncestorCommits();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not warn for a full (non-shallow) clone', async () => {
+    execFileSyncMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args.includes('--is-shallow-repository')) return 'false\n';
+      if (args[0] === 'rev-list') return 'tip111\n';
+      return '';
+    });
+
+    const mod = await loadFresh();
+    mod.autodetectAncestorCommits();
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 });

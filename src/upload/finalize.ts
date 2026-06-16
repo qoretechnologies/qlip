@@ -19,7 +19,12 @@
  */
 
 import type { QlipRuntimeConfig, QlipUploadOptions } from '../types.js';
-import { autodetectBranch, autodetectCommit } from './autodetect.js';
+import {
+  autodetectAncestorCommits,
+  autodetectBaseBranch,
+  autodetectBranch,
+  autodetectCommit,
+} from './autodetect.js';
 import { mergeManifestFragments } from './manifest.js';
 import { QlipUploadError, uploadBuild, resolveServerUrl } from './upload.js';
 
@@ -69,11 +74,16 @@ export const finalizeBuild = async (
 
   const branch = opts.upload.branch ?? autodetectBranch();
   const commit = opts.upload.commit ?? autodetectCommit();
+  const baseBranch = opts.upload.baseBranch ?? autodetectBaseBranch();
+  const ancestorCommits =
+    opts.upload.ancestorCommits ?? autodetectAncestorCommits();
 
   const resolved: QlipUploadOptions = {
     ...opts.upload,
     ...(branch !== undefined ? { branch } : {}),
     ...(commit !== undefined ? { commit } : {}),
+    ...(baseBranch !== undefined ? { baseBranch } : {}),
+    ...(ancestorCommits !== undefined ? { ancestorCommits } : {}),
   };
 
   try {
@@ -81,10 +91,13 @@ export const finalizeBuild = async (
       buildDir: opts.runtime.buildDir,
       options: resolved,
     });
-    // Single-line success log so CI output stays tidy.
+    const detail =
+      result.protocol === 'v2'
+        ? `${String(result.blobsUploaded ?? 0)}/${String(result.blobsTotal ?? 0)} screenshots uploaded${result.blobsUploaded === 0 ? ' (all unchanged)' : ''}`
+        : `${String(merged.manifest.entries.length)} entries, legacy protocol`;
     // eslint-disable-next-line no-console
     console.log(
-      `[qlip] uploaded build ${result.buildId} (${String(merged.fragmentCount)} fragment${merged.fragmentCount === 1 ? '' : 's'}, ${String(merged.manifest.entries.length)} entries) → ${resolveServerUrl(resolved)}`,
+      `[qlip] uploaded build ${result.buildId} (${String(merged.fragmentCount)} fragment${merged.fragmentCount === 1 ? '' : 's'}, ${detail}) → ${resolveServerUrl(resolved)}`,
     );
   } catch (err) {
     const message =

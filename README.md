@@ -145,6 +145,26 @@ See `qlip-server`'s `design/API.md §0` (auth model) and `§18`
 (token CRUD) for the server side, and `design/UPLOAD.md` here for
 the upload protocol.
 
+### CI checkout: use `fetch-depth: 0` for accurate baselines
+
+qlip auto-detects the commit ancestry (via `git rev-list`) and, on PR
+builds, the base branch (via `$GITHUB_BASE_REF`) and sends them with
+every upload. The server walks the ancestry to find the nearest prior
+build to diff against. A **shallow** clone — `actions/checkout`'s
+default — only fetches the tip commit, so that walk has nothing to
+follow and the server falls back to the project's default branch,
+producing noisier diffs. Fetch full history:
+
+```yaml
+- uses: actions/checkout@v4
+  with:
+    fetch-depth: 0
+```
+
+qlip prints a one-time warning when it detects a shallow clone. It
+never fails the upload over this — accuracy degrades, the run still
+succeeds.
+
 ## Manual screenshots inside play
 
 Use the existing **"Logged In"** story as a real-world example:

@@ -9,6 +9,8 @@ export {
 export {
   autodetectBranch,
   autodetectCommit,
+  autodetectBaseBranch,
+  autodetectAncestorCommits,
 } from './upload/autodetect.js';
 export type {
   QlipConsoleLevel,
