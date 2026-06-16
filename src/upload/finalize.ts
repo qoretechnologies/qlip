@@ -81,10 +81,13 @@ export const finalizeBuild = async (
       buildDir: opts.runtime.buildDir,
       options: resolved,
     });
-    // Single-line success log so CI output stays tidy.
+    const detail =
+      result.protocol === 'v2'
+        ? `${String(result.blobsUploaded ?? 0)}/${String(result.blobsTotal ?? 0)} screenshots uploaded${result.blobsUploaded === 0 ? ' (all unchanged)' : ''}`
+        : `${String(merged.manifest.entries.length)} entries, legacy protocol`;
     // eslint-disable-next-line no-console
     console.log(
-      `[qlip] uploaded build ${result.buildId} (${String(merged.fragmentCount)} fragment${merged.fragmentCount === 1 ? '' : 's'}, ${String(merged.manifest.entries.length)} entries) → ${resolveServerUrl(resolved)}`,
+      `[qlip] uploaded build ${result.buildId} (${String(merged.fragmentCount)} fragment${merged.fragmentCount === 1 ? '' : 's'}, ${detail}) → ${resolveServerUrl(resolved)}`,
     );
   } catch (err) {
     const message =

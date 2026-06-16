@@ -26,15 +26,18 @@ import type { QlipManifest } from '../../src/types.js';
 let tmpRoot: string;
 let originalFetch: typeof globalThis.fetch;
 let recordedRequests: Array<{ url: string; method: string; bodyText: string }>;
-let nextResponse: Response;
+/**
+ * When set, the mock returns this for EVERY request (used by the
+ * failure tests to make the create phase fail). When null, the mock
+ * plays the real v2 server: create echoes the manifest's missing
+ * blob keys, blob PUTs + finalize succeed.
+ */
+let forcedResponse: Response | null;
 
-/** Stub fetch so finalizeBuild's POST is captured locally. */
+/** Stub fetch so the v2 upload flow is served locally. */
 const installFetch = (): void => {
   recordedRequests = [];
-  nextResponse = new Response(JSON.stringify({ buildId: 'ok' }), {
-    status: 200,
-    headers: { 'content-type': 'application/json' },
-  });
+  forcedResponse = null;
   globalThis.fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url =
       typeof input === 'string'
@@ -42,18 +45,46 @@ const installFetch = (): void => {
         : input instanceof URL
           ? input.toString()
           : input.url;
+    const method = init?.method ?? 'GET';
     const bodyText =
       init?.body instanceof FormData
         ? '[form-data]'
         : typeof init?.body === 'string'
           ? init.body
           : '';
-    recordedRequests.push({
-      url,
-      method: init?.method ?? 'GET',
-      bodyText,
-    });
-    return Promise.resolve(nextResponse);
+    recordedRequests.push({ url, method, bodyText });
+
+    if (forcedResponse) return Promise.resolve(forcedResponse.clone());
+
+    const pathname = new URL(url).pathname;
+    // Phase 1: create — echo buildId + every captured entry's hash.
+    if (method === 'POST' && pathname === '/api/builds') {
+      const parsed = JSON.parse(bodyText) as { manifest: QlipManifest };
+      const missing = parsed.manifest.entries
+        .filter((e) => e.status === 'captured')
+        .map((e) => e.sha256 ?? '');
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ buildId: parsed.manifest.buildId, missing }),
+          { status: 201, headers: { 'content-type': 'application/json' } },
+        ),
+      );
+    }
+    // Phase 2: blob PUT.
+    if (method === 'PUT' && pathname.includes('/blobs/')) {
+      return Promise.resolve(
+        new Response(JSON.stringify({ result: 'stored' }), { status: 201 }),
+      );
+    }
+    // Phase 3: finalize.
+    if (method === 'POST' && pathname.endsWith('/finalize')) {
+      return Promise.resolve(
+        new Response(JSON.stringify({ build: { id: 'ok' }, snapshots: [] }), {
+          status: 201,
+        }),
+      );
+    }
+    return Promise.resolve(new Response('unrouted', { status: 404 }));
   }) as typeof globalThis.fetch;
 };
 
@@ -165,10 +196,11 @@ describe('runUpload', () => {
     );
     expect(result.exitCode).toBe(0);
     expect(result.buildDir).toBe(buildDir);
-    expect(recordedRequests).toHaveLength(1);
+    // v2: first request is create at the hosted instance, last is finalize.
     expect(recordedRequests[0].url).toBe(
-      'https://qlip.qoretechnologies.com/api/builds/upload',
+      'https://qlip.qoretechnologies.com/api/builds',
     );
+    expect(recordedRequests.at(-1)?.url).toMatch(/\/finalize$/);
   });
 
   it('shows help with exit 0 on --help', async () => {
@@ -242,11 +274,11 @@ describe('runUpload', () => {
     expect(result.exitCode).toBe(0);
     expect(result.buildDir).toBe(buildDir);
 
-    expect(recordedRequests).toHaveLength(1);
-    expect(recordedRequests[0].url).toBe(
-      'http://localhost:3100/api/builds/upload',
-    );
+    // v2 three-phase flow: create → blob PUT → finalize.
+    expect(recordedRequests[0].url).toBe('http://localhost:3100/api/builds');
     expect(recordedRequests[0].method).toBe('POST');
+    expect(recordedRequests.some((r) => r.url.includes('/blobs/'))).toBe(true);
+    expect(recordedRequests.at(-1)?.url).toMatch(/\/finalize$/);
 
     // The merge writes manifest.json to the buildDir.
     const manifestText = await readFile(
@@ -315,13 +347,13 @@ describe('runUpload', () => {
     );
 
     expect(recordedRequests[0].url).toBe(
-      'http://override.example.com/api/builds/upload',
+      'http://override.example.com/api/builds',
     );
   });
 
   it('exit 0 by default when upload fails (logs but doesn\'t fail)', async () => {
     await seedBuildDir(tmpRoot, '20991231-000000');
-    nextResponse = new Response('boom', { status: 500 });
+    forcedResponse = new Response('boom', { status: 500 });
 
     const log = vi.fn();
     const error = vi.fn();
@@ -342,7 +374,7 @@ describe('runUpload', () => {
 
   it('exit 2 with --fail-on-upload-error when upload fails', async () => {
     await seedBuildDir(tmpRoot, '20991231-000000');
-    nextResponse = new Response('boom', { status: 500 });
+    forcedResponse = new Response('boom', { status: 500 });
 
     const log = vi.fn();
     const error = vi.fn();

@@ -152,6 +152,13 @@ export interface QlipManifestEntry {
   error: { message: string; stack?: string } | null;
   timings: { ms: number };
   logsPath?: string;
+  /**
+   * sha256 hex of the PNG (the blob key). Set by `uploadBuild` at send
+   * time, not persisted to the on-disk manifest. Absent on non-captured
+   * entries. See `qlip-server/design/UPLOAD.md §0`.
+   */
+  sha256?: string;
+  sizeBytes?: number;
 }
 
 export interface QlipManifest {

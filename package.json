@@ -1,6 +1,6 @@
 {
   "name": "@qoretechnologies/qlip",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Storybook screenshot capture for the Vitest addon",
   "type": "module",
   "main": "./dist/index.js",

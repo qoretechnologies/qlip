@@ -83,6 +83,21 @@ When you believe the task is complete:
 - Check if a helper or utility already exists before writing a new one.
 - Keep the main branch runnable: no broken builds, no failing tests.
 
+## Comments — why, not what
+
+Default to no comment; let names and types carry the meaning. Write a
+comment **only** when deleting it would lose something a reader can't
+recover from the code + `git blame`:
+
+- An external constraint or footgun — a browser/Node quirk, an upstream
+  issue number, a security invariant, a non-obvious ordering. Keep it
+  to one or two tight lines.
+- **Don't** narrate what the next line does, add decorative `═══`/`──`
+  section banners, or restate a design doc. For a contract, link it
+  (`see design/UPLOAD.md`) instead of copying it — a second copy drifts.
+- If a block needs a "what" comment to be understood, prefer extracting
+  a well-named helper over explaining it.
+
 ## Dependency version policy (IMPORTANT)
 
 - Always use the **latest stable versions** of dependencies at the time of implementation.
