@@ -392,6 +392,48 @@ describe('uploadBuild — v2 happy path', () => {
     await uploadBuild({ buildDir: workDir, options: {}, fetchImpl });
     expect(calls[0].url).toBe('https://qlip.qoretechnologies.com/api/builds');
   });
+
+  it('includes baseBranch + ancestorCommits as native JSON when present', async () => {
+    workDir = (await seedBuildDir(manifest())).dir;
+    const { fetchImpl, calls } = scriptedFetch({
+      create: createOk(() => []),
+      finalize: () => finalizeOk(),
+    });
+    await uploadBuild({
+      buildDir: workDir,
+      options: {
+        serverUrl: 'http://localhost:3100',
+        baseBranch: 'develop',
+        ancestorCommits: ['aaa111', 'bbb222'],
+      },
+      fetchImpl,
+    });
+    const createBody = JSON.parse(calls[0].body as string) as {
+      baseBranch: string;
+      ancestorCommits: string[];
+    };
+    expect(createBody.baseBranch).toBe('develop');
+    expect(createBody.ancestorCommits).toEqual(['aaa111', 'bbb222']);
+  });
+
+  it('omits baseBranch + ancestorCommits from the create body when absent', async () => {
+    workDir = (await seedBuildDir(manifest())).dir;
+    const { fetchImpl, calls } = scriptedFetch({
+      create: createOk(() => []),
+      finalize: () => finalizeOk(),
+    });
+    await uploadBuild({
+      buildDir: workDir,
+      options: { serverUrl: 'http://localhost:3100' },
+      fetchImpl,
+    });
+    const createBody = JSON.parse(calls[0].body as string) as Record<
+      string,
+      unknown
+    >;
+    expect('baseBranch' in createBody).toBe(false);
+    expect('ancestorCommits' in createBody).toBe(false);
+  });
 });
 
 describe('uploadBuild — retry + error handling', () => {
@@ -519,6 +561,54 @@ describe('uploadBuild — legacy fallback', () => {
       'screenshots[stories/auto/Example_Button--Primary.png]',
     );
     expect(legacyBody!.get('project')).toBe('legacy-proj');
+  });
+
+  it('sends baseBranch as a plain field and ancestorCommits as a JSON string', async () => {
+    workDir = (await seedBuildDir(manifest())).dir;
+    let legacyBody: FormData | undefined;
+
+    const { fetchImpl } = scriptedFetch({
+      legacy: (req) => {
+        legacyBody = req.body as FormData;
+        return new Response('{}', { status: 201 });
+      },
+    });
+
+    await uploadBuild({
+      buildDir: workDir,
+      options: {
+        serverUrl: 'http://localhost:3100',
+        baseBranch: 'develop',
+        ancestorCommits: ['aaa111', 'bbb222'],
+      },
+      fetchImpl,
+    });
+
+    expect(legacyBody!.get('baseBranch')).toBe('develop');
+    const raw = legacyBody!.get('ancestorCommits');
+    expect(typeof raw).toBe('string');
+    expect(JSON.parse(raw as string)).toEqual(['aaa111', 'bbb222']);
+  });
+
+  it('omits baseBranch + ancestorCommits from the legacy form when absent', async () => {
+    workDir = (await seedBuildDir(manifest())).dir;
+    let legacyBody: FormData | undefined;
+
+    const { fetchImpl } = scriptedFetch({
+      legacy: (req) => {
+        legacyBody = req.body as FormData;
+        return new Response('{}', { status: 201 });
+      },
+    });
+
+    await uploadBuild({
+      buildDir: workDir,
+      options: { serverUrl: 'http://localhost:3100' },
+      fetchImpl,
+    });
+
+    expect(legacyBody!.has('baseBranch')).toBe(false);
+    expect(legacyBody!.has('ancestorCommits')).toBe(false);
   });
 });
 

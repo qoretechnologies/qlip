@@ -43,6 +43,11 @@ The plugin registers a Vitest `Reporter` (`QlipUploadReporter`) whose
 - Reads branch + commit from `$GITHUB_HEAD_REF` / `$GITHUB_REF_NAME` /
   `$GITHUB_SHA` first, falling back to `git rev-parse`. Pass either
   explicitly to skip detection.
+- Reads the PR base branch from `$GITHUB_BASE_REF` (PR builds only) and
+  the commit ancestry from `git rev-list --max-count=100 HEAD`
+  (nearest-first), so the server can resolve a baseline. Both are
+  omitted when unavailable; a shallow clone truncates the ancestry and
+  triggers a one-time warning (set `actions/checkout` `fetch-depth: 0`).
 
 ---
 
@@ -56,8 +61,10 @@ qlip uploads via the **content-addressed three-phase protocol**. The
 how it behaves. Client implementation: `src/upload/upload.ts`.
 
 1. **`POST <serverUrl>/api/builds`** — JSON body
-   `{ manifest, project?, branch?, commit? }`. Before sending, the
-   client stream-hashes every captured screenshot and writes
+   `{ manifest, project?, branch?, commit?, baseBranch?, ancestorCommits? }`
+   (`baseBranch` a string, `ancestorCommits` a native JSON array of
+   SHAs ordered nearest-first; both omitted when unavailable). Before
+   sending, the client stream-hashes every captured screenshot and writes
    `sha256` + `sizeBytes` onto each captured manifest entry
    (`src/upload/hash.ts`). The server replies
    `{ buildId, missing: [sha256, …] }`.
@@ -74,7 +81,9 @@ how it behaves. Client implementation: `src/upload/upload.ts`.
 qlip-server predating the v2 routes), the client transparently falls
 back to the original single multipart `POST /api/builds/upload`
 (manifest file + one `screenshots[<entry.path>]` part per captured
-entry + `project`/`branch`/`commit` text fields). This keeps the
+entry + `project`/`branch`/`commit`/`baseBranch` text fields, with
+`ancestorCommits` appended as a **JSON-encoded string** field — all the
+metadata fields omitted when unavailable). This keeps the
 published client working against older self-hosted servers. The
 fallback path is the one that can hit a reverse-proxy `413` on large
 builds — the v2 path can't, since each request carries a single
@@ -194,6 +203,22 @@ The first non-empty value wins:
 
 If nothing matches, the field is omitted from the upload — the server
 stores it as null.
+
+## Detection rules — base branch + ancestry
+
+| Source | baseBranch | ancestorCommits |
+|---|---|---|
+| Explicit `upload.baseBranch` / `upload.ancestorCommits` | yes | yes |
+| `$GITHUB_BASE_REF` (PR builds only) | yes | — |
+| `git rev-list --max-count=100 HEAD` (nearest-first) | — | yes |
+
+`baseBranch` has no git-local fallback — a base branch only exists in a
+PR context, so on push builds it's omitted and the server uses the
+project's default branch. `ancestorCommits` is omitted when git is
+unavailable or reports nothing. A **shallow** clone returns a truncated
+ancestry and emits a one-time warning (`git rev-parse
+--is-shallow-repository`); the upload still proceeds. See the
+`fetch-depth: 0` note in `README.md`.
 
 ---
 

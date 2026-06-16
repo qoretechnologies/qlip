@@ -194,6 +194,13 @@ const uploadBuildLegacy = async (
   form.append('project', options.project ?? 'default');
   if (options.branch !== undefined) form.append('branch', options.branch);
   if (options.commit !== undefined) form.append('commit', options.commit);
+  if (options.baseBranch !== undefined) {
+    form.append('baseBranch', options.baseBranch);
+  }
+  if (options.ancestorCommits !== undefined) {
+    // Multipart fields are strings; the server JSON-parses this one.
+    form.append('ancestorCommits', JSON.stringify(options.ancestorCommits));
+  }
 
   const response = await fetchImpl(`${baseUrl}/api/builds/upload`, {
     method: 'POST',
@@ -240,6 +247,12 @@ export const uploadBuild = async (
       project: options.project ?? 'default',
       ...(options.branch !== undefined ? { branch: options.branch } : {}),
       ...(options.commit !== undefined ? { commit: options.commit } : {}),
+      ...(options.baseBranch !== undefined
+        ? { baseBranch: options.baseBranch }
+        : {}),
+      ...(options.ancestorCommits !== undefined
+        ? { ancestorCommits: options.ancestorCommits }
+        : {}),
     }),
   });
 

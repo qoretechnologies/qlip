@@ -19,7 +19,12 @@
  */
 
 import type { QlipRuntimeConfig, QlipUploadOptions } from '../types.js';
-import { autodetectBranch, autodetectCommit } from './autodetect.js';
+import {
+  autodetectAncestorCommits,
+  autodetectBaseBranch,
+  autodetectBranch,
+  autodetectCommit,
+} from './autodetect.js';
 import { mergeManifestFragments } from './manifest.js';
 import { QlipUploadError, uploadBuild, resolveServerUrl } from './upload.js';
 
@@ -69,11 +74,16 @@ export const finalizeBuild = async (
 
   const branch = opts.upload.branch ?? autodetectBranch();
   const commit = opts.upload.commit ?? autodetectCommit();
+  const baseBranch = opts.upload.baseBranch ?? autodetectBaseBranch();
+  const ancestorCommits =
+    opts.upload.ancestorCommits ?? autodetectAncestorCommits();
 
   const resolved: QlipUploadOptions = {
     ...opts.upload,
     ...(branch !== undefined ? { branch } : {}),
     ...(commit !== undefined ? { commit } : {}),
+    ...(baseBranch !== undefined ? { baseBranch } : {}),
+    ...(ancestorCommits !== undefined ? { ancestorCommits } : {}),
   };
 
   try {
