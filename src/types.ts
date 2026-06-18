@@ -75,6 +75,16 @@ export interface QlipUploadOptions {
    * git history is unavailable. See `design/UPLOAD.md`.
    */
   ancestorCommits?: string[];
+  /**
+   * Pull-request URL for the build (e.g.
+   * "https://github.com/owner/repo/pull/123"). Auto-detected from the
+   * GitHub Actions PR context ($GITHUB_REF `refs/pull/<n>/merge` +
+   * $GITHUB_SERVER_URL/$GITHUB_REPOSITORY) when omitted. Only present
+   * on `pull_request` builds — undefined (not sent) for local runs and
+   * direct pushes. The server stores it so the dashboard can show a
+   * "View PR" link. See `design/UPLOAD.md`.
+   */
+  pullRequestUrl?: string;
   /** Skip upload entirely (handy for local-only runs). */
   disabled?: boolean;
   /**
@@ -159,6 +169,19 @@ export interface QlipManifestEntry {
   storyId: string;
   storyTitle?: string;
   storyName?: string;
+  /**
+   * The story's component (CSF default export) name, e.g.
+   * "ReqoreEntityRow". Sourced from addon-vitest's
+   * `task.meta.componentName`, which is the only reliable component
+   * identity available at capture time — the composed story exposes no
+   * `title`, and the storyId is a lossy kebab encoding that can't
+   * distinguish the title's `/` separators from spaces (so a
+   * storyId-derived title collapses distinct components to a shared
+   * leaf, e.g. "Display/Entity Row" + "Display/Severity Row" → "Row").
+   * The server prefers this over the storyTitle/storyId derivation when
+   * present. Absent on the manual `screenshot()` path (no test task).
+   */
+  componentName?: string;
   screenshotName: string;
   path: string;
   viewport: QlipViewport;

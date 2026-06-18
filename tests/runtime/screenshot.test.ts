@@ -292,6 +292,56 @@ describe('screenshot capture', () => {
     expect(entry?.storyName).toBe('New Webhook Can Be Added');
   });
 
+  // qlip#12 regression. addon-vitest sets `task.meta.componentName` to
+  // the CSF component export (e.g. 'ReqoreEntityRow') but discards the
+  // meta `title`; the composed story exposes no title and the storyId
+  // is a lossy kebab ('display-entity-row' — `/` and spaces both became
+  // `-`). Without the component name, two distinct components
+  // ('Display/Entity Row' + 'Display/Severity Row') both derive a
+  // storyTitle whose leaf is 'Row' and collapse in the dashboard. We
+  // capture `task.meta.componentName` so the server can group by the
+  // real, non-colliding component identity.
+  it('captures task.meta.componentName onto the entry (qlip#12)', async () => {
+    const { page } = await import('@vitest/browser/context');
+    page.screenshot.mockResolvedValue('ok');
+
+    const composedStory = Object.assign(function storyFn() {}, {
+      id: 'display-entity-row--no-wrap',
+      storyName: 'No Wrap',
+      // No `.title` — composeStory never re-exposes meta.title.
+    });
+
+    await captureAutoScreenshot({
+      task: {
+        meta: {
+          storyId: 'display-entity-row--no-wrap',
+          componentName: 'ReqoreEntityRow',
+        },
+        name: 'No Wrap',
+      },
+      story: composedStory as never,
+    });
+
+    const entry = getRuntimeState()?.manifest.entries[0];
+    expect(entry?.componentName).toBe('ReqoreEntityRow');
+    // The story name still resolves correctly (it was never the bug).
+    expect(entry?.storyName).toBe('No Wrap');
+  });
+
+  it('leaves componentName undefined when task.meta omits it', async () => {
+    const { page } = await import('@vitest/browser/context');
+    page.screenshot.mockResolvedValue('ok');
+
+    await captureAutoScreenshot({
+      task: { meta: { storyId: 'button--primary' }, name: 'Primary' },
+      story: { id: 'button--primary', title: 'Components/Button', name: 'Primary' },
+    } as never);
+
+    expect(
+      getRuntimeState()?.manifest.entries[0]?.componentName,
+    ).toBeUndefined();
+  });
+
   it('preserves explicit storyTitle / storyName when both are already set', async () => {
     const { page } = await import('@vitest/browser/context');
     page.screenshot.mockResolvedValue('ok');
@@ -312,6 +362,49 @@ describe('screenshot capture', () => {
     // "Logged In" already has a space, so the humanizer is a no-op
     // (no PascalCase boundaries to break on).
     expect(entry?.storyName).toBe('Logged In');
+  });
+
+  // Cross-repo contract guard. qlip-server persists the *full* Storybook
+  // title path into its `snapshots.title` column so the dashboard can
+  // group snapshots like Storybook's sidebar. That grouping depends on
+  // the whole `Root/Group/Sub` path surviving — verbatim, never reduced
+  // to the leaf — into the manifest fragment serialized to disk (the
+  // exact bytes the server ingests). This asserts the serialized JSON,
+  // not just the in-memory entry, so a regression that strips/truncates
+  // the title at the write boundary fails here rather than silently
+  // breaking the server's grouping.
+  it('emits the full multi-segment storyTitle verbatim into the written manifest fragment', async () => {
+    const { page, commands } = await import('@vitest/browser/context');
+    page.screenshot.mockResolvedValue('ok');
+
+    await captureAutoScreenshot({
+      task: {
+        meta: { storyId: 'example-forms-inputs--button' },
+        name: 'Button',
+      },
+      story: {
+        id: 'example-forms-inputs--button',
+        title: 'Example/Forms/Inputs/Button',
+        name: 'Button',
+      },
+    } as never);
+
+    // Find the manifest fragment write (a `.json` payload that parses to
+    // an object carrying `entries`) — screenshots are written through
+    // the same mocked `writeFile`, so key off the parsed shape.
+    const fragment = commands.writeFile.mock.calls
+      .map((call) => {
+        try {
+          return JSON.parse(call[1] as string) as { entries?: unknown[] };
+        } catch {
+          return null;
+        }
+      })
+      .find((parsed) => parsed !== null && Array.isArray(parsed.entries));
+
+    expect(fragment).toBeDefined();
+    const written = (fragment!.entries as { storyTitle?: string }[])[0];
+    expect(written?.storyTitle).toBe('Example/Forms/Inputs/Button');
   });
 
   // 2026-05-25: storyName humanization. Storybook's `composeStory`

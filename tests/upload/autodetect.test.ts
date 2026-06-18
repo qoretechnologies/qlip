@@ -17,6 +17,7 @@ import {
   autodetectBaseBranch,
   autodetectBranch,
   autodetectCommit,
+  autodetectPullRequestUrl,
 } from '../../src/upload/autodetect.js';
 
 // Save + restore env so tests don't pollute each other.
@@ -25,6 +26,9 @@ const savedEnv = {
   GITHUB_REF_NAME: process.env['GITHUB_REF_NAME'],
   GITHUB_SHA: process.env['GITHUB_SHA'],
   GITHUB_BASE_REF: process.env['GITHUB_BASE_REF'],
+  GITHUB_REF: process.env['GITHUB_REF'],
+  GITHUB_REPOSITORY: process.env['GITHUB_REPOSITORY'],
+  GITHUB_SERVER_URL: process.env['GITHUB_SERVER_URL'],
 };
 
 beforeEach(() => {
@@ -32,6 +36,9 @@ beforeEach(() => {
   delete process.env['GITHUB_REF_NAME'];
   delete process.env['GITHUB_SHA'];
   delete process.env['GITHUB_BASE_REF'];
+  delete process.env['GITHUB_REF'];
+  delete process.env['GITHUB_REPOSITORY'];
+  delete process.env['GITHUB_SERVER_URL'];
   execFileSyncMock.mockReset();
 });
 
@@ -98,6 +105,52 @@ describe('autodetectBaseBranch', () => {
   it('treats an empty GITHUB_BASE_REF as absent', () => {
     process.env['GITHUB_BASE_REF'] = '';
     expect(autodetectBaseBranch()).toBeUndefined();
+  });
+});
+
+describe('autodetectPullRequestUrl', () => {
+  it('constructs the PR URL from GITHUB_REF + repo + server URL', () => {
+    process.env['GITHUB_REF'] = 'refs/pull/123/merge';
+    process.env['GITHUB_REPOSITORY'] = 'qoretechnologies/qlip';
+    process.env['GITHUB_SERVER_URL'] = 'https://github.com';
+    expect(autodetectPullRequestUrl()).toBe(
+      'https://github.com/qoretechnologies/qlip/pull/123',
+    );
+    // Env-only — must never shell out for PR context.
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('defaults the server URL to https://github.com when unset', () => {
+    process.env['GITHUB_REF'] = 'refs/pull/7/head';
+    process.env['GITHUB_REPOSITORY'] = 'owner/repo';
+    expect(autodetectPullRequestUrl()).toBe(
+      'https://github.com/owner/repo/pull/7',
+    );
+  });
+
+  it('honors a self-hosted GITHUB_SERVER_URL (GHES)', () => {
+    process.env['GITHUB_REF'] = 'refs/pull/42/merge';
+    process.env['GITHUB_REPOSITORY'] = 'team/app';
+    process.env['GITHUB_SERVER_URL'] = 'https://ghe.example.com/';
+    // Trailing slash on the server URL is trimmed so we never emit `//pull`.
+    expect(autodetectPullRequestUrl()).toBe(
+      'https://ghe.example.com/team/app/pull/42',
+    );
+  });
+
+  it('returns undefined for a push build (GITHUB_REF is a branch ref)', () => {
+    process.env['GITHUB_REF'] = 'refs/heads/main';
+    process.env['GITHUB_REPOSITORY'] = 'owner/repo';
+    expect(autodetectPullRequestUrl()).toBeUndefined();
+  });
+
+  it('returns undefined for local runs (no GITHUB_REF)', () => {
+    expect(autodetectPullRequestUrl()).toBeUndefined();
+  });
+
+  it('returns undefined when the repository slug is missing', () => {
+    process.env['GITHUB_REF'] = 'refs/pull/123/merge';
+    expect(autodetectPullRequestUrl()).toBeUndefined();
   });
 });
 

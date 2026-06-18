@@ -201,6 +201,9 @@ const uploadBuildLegacy = async (
     // Multipart fields are strings; the server JSON-parses this one.
     form.append('ancestorCommits', JSON.stringify(options.ancestorCommits));
   }
+  if (options.pullRequestUrl !== undefined) {
+    form.append('pullRequestUrl', options.pullRequestUrl);
+  }
 
   const response = await fetchImpl(`${baseUrl}/api/builds/upload`, {
     method: 'POST',
@@ -252,6 +255,9 @@ export const uploadBuild = async (
         : {}),
       ...(options.ancestorCommits !== undefined
         ? { ancestorCommits: options.ancestorCommits }
+        : {}),
+      ...(options.pullRequestUrl !== undefined
+        ? { pullRequestUrl: options.pullRequestUrl }
         : {}),
     }),
   });
