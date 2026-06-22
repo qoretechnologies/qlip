@@ -1,7 +1,7 @@
 /**
  * Auto-detect git metadata for the build being uploaded: the head
- * branch + commit SHA, the PR base branch, and the commit ancestry
- * the server uses to resolve a baseline.
+ * branch + commit SHA, the PR base branch, the pull-request URL, and
+ * the commit ancestry the server uses to resolve a baseline.
  *
  * Order of precedence (branch/commit):
  *   - GitHub Actions env vars ($GITHUB_HEAD_REF for PRs, then
@@ -61,6 +61,36 @@ export const autodetectCommit = (): string | undefined => {
 export const autodetectBaseBranch = (): string | undefined => {
   const baseRef = process.env['GITHUB_BASE_REF'];
   return baseRef && baseRef.length > 0 ? baseRef : undefined;
+};
+
+/**
+ * The pull-request URL for the build, when running in a GitHub Actions
+ * `pull_request` context. GitHub sets `$GITHUB_REF` to
+ * `refs/pull/<number>/merge` on PR events; we pair the parsed number
+ * with `$GITHUB_SERVER_URL` (defaults to https://github.com) and
+ * `$GITHUB_REPOSITORY` (`owner/repo`) to construct the canonical PR
+ * URL — the same one GitHub exposes as `pull_request.html_url`.
+ *
+ * Env-only by design: a PR URL only exists in a PR CI context, so there
+ * is no git-local equivalent. Returns undefined for local runs and
+ * direct pushes (no `refs/pull/...` ref), and the server stores it as
+ * nullable, so absence degrades gracefully ("no PR link"). See
+ * `qlip-server/design/UPLOAD.md`.
+ */
+export const autodetectPullRequestUrl = (): string | undefined => {
+  const ref = process.env['GITHUB_REF'];
+  // `refs/pull/<number>/merge` (or `/head`) — the PR event ref shape.
+  const match = ref ? /^refs\/pull\/(\d+)\//.exec(ref) : null;
+  if (!match) return undefined;
+  const prNumber = match[1];
+
+  const repo = process.env['GITHUB_REPOSITORY'];
+  if (!repo || repo.length === 0) return undefined;
+
+  const serverUrl = process.env['GITHUB_SERVER_URL'] || 'https://github.com';
+  // Trim any trailing slash on the server URL so we never emit `//pull`.
+  const base = serverUrl.replace(/\/+$/, '');
+  return `${base}/${repo}/pull/${prNumber}`;
 };
 
 let shallowWarningEmitted = false;

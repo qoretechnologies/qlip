@@ -138,6 +138,10 @@ const resolveStoryInfo = (ctx: QlipStoryContext) => {
     id: storyId,
     title: ctx.title,
     name: humanizedName,
+    // Filled by the auto/error capture entry points from the test
+    // task's `meta.componentName` (addon-vitest); the composed story
+    // context itself carries no component name.
+    componentName: undefined as string | undefined,
     parameters: ctx.parameters?.qlip,
   };
 };
@@ -402,6 +406,7 @@ const buildEntry = ({
   storyId,
   storyTitle,
   storyName,
+  componentName,
   screenshotName,
   relativePath,
   viewport,
@@ -414,6 +419,7 @@ const buildEntry = ({
   storyId: string;
   storyTitle?: string;
   storyName?: string;
+  componentName?: string;
   screenshotName: string;
   relativePath: string;
   viewport: QlipViewport;
@@ -432,6 +438,7 @@ const buildEntry = ({
   status,
   error,
   timings: { ms: timingsMs },
+  ...(componentName ? { componentName } : {}),
   ...(logsPath ? { logsPath } : {}),
 });
 
@@ -510,6 +517,7 @@ const captureScreenshot = async ({
         storyId: story.id,
         storyTitle: story.title,
         storyName: story.name,
+        componentName: story.componentName,
         screenshotName: name,
         relativePath: usesNamedPath
           ? buildManualScreenshotPath({
@@ -629,6 +637,7 @@ const captureScreenshot = async ({
     storyId: story.id,
     storyTitle: story.title,
     storyName: story.name,
+    componentName: story.componentName,
     screenshotName: name,
     relativePath,
     viewport: resolved.viewport,
@@ -727,6 +736,20 @@ const FUNCTION_NAME_TAGS = new Set(['storyFn', 'unboundStoryFn', '']);
 const isFunctionNameTag = (value: string | undefined): boolean =>
   value === undefined || FUNCTION_NAME_TAGS.has(value);
 
+/**
+ * The story's component (CSF default export) name as exposed by
+ * addon-vitest on `task.meta.componentName` (e.g. "ReqoreEntityRow").
+ * This is the only trustworthy component identity at capture time —
+ * unlike the storyId-derived title, it can't collapse distinct
+ * components to a shared kebab leaf. Returns undefined when absent
+ * (older addon, non-Storybook runners).
+ */
+const metaComponentName = (ctx: QlipTestContext): string | undefined => {
+  const name = (ctx.task.meta as { componentName?: string } | undefined)
+    ?.componentName;
+  return typeof name === 'string' && name.length > 0 ? name : undefined;
+};
+
 export const captureAutoScreenshot = async (ctx: QlipTestContext) => {
   const runtime = initRuntimeState();
   if (!runtime) {
@@ -744,6 +767,7 @@ export const captureAutoScreenshot = async (ctx: QlipTestContext) => {
   if (!story.id && typeof metaStoryId === 'string') {
     story.id = metaStoryId;
   }
+  story.componentName = metaComponentName(ctx);
   if (story.id && (!story.title || !story.name)) {
     const storeStory = readStoryFromStore(story.id);
     if (storeStory?.title && !story.title) {
@@ -789,6 +813,7 @@ export const captureErrorScreenshot = async (ctx: QlipTestContext) => {
   if (!story.id && typeof errorMetaStoryId === 'string') {
     story.id = errorMetaStoryId;
   }
+  story.componentName = metaComponentName(ctx);
   const params = story.parameters;
   const resolvedOptions = resolveQlipOptions({ defaults: runtime.config.defaults, story: params });
   if (resolvedOptions.skip) {

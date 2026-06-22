@@ -416,7 +416,29 @@ describe('uploadBuild — v2 happy path', () => {
     expect(createBody.ancestorCommits).toEqual(['aaa111', 'bbb222']);
   });
 
-  it('omits baseBranch + ancestorCommits from the create body when absent', async () => {
+  it('includes pullRequestUrl in the create body when present', async () => {
+    workDir = (await seedBuildDir(manifest())).dir;
+    const { fetchImpl, calls } = scriptedFetch({
+      create: createOk(() => []),
+      finalize: () => finalizeOk(),
+    });
+    await uploadBuild({
+      buildDir: workDir,
+      options: {
+        serverUrl: 'http://localhost:3100',
+        pullRequestUrl: 'https://github.com/owner/repo/pull/123',
+      },
+      fetchImpl,
+    });
+    const createBody = JSON.parse(calls[0].body as string) as {
+      pullRequestUrl: string;
+    };
+    expect(createBody.pullRequestUrl).toBe(
+      'https://github.com/owner/repo/pull/123',
+    );
+  });
+
+  it('omits baseBranch + ancestorCommits + pullRequestUrl from the create body when absent', async () => {
     workDir = (await seedBuildDir(manifest())).dir;
     const { fetchImpl, calls } = scriptedFetch({
       create: createOk(() => []),
@@ -433,6 +455,7 @@ describe('uploadBuild — v2 happy path', () => {
     >;
     expect('baseBranch' in createBody).toBe(false);
     expect('ancestorCommits' in createBody).toBe(false);
+    expect('pullRequestUrl' in createBody).toBe(false);
   });
 });
 

@@ -24,6 +24,7 @@ import {
   autodetectBaseBranch,
   autodetectBranch,
   autodetectCommit,
+  autodetectPullRequestUrl,
 } from './autodetect.js';
 import { mergeManifestFragments } from './manifest.js';
 import { QlipUploadError, uploadBuild, resolveServerUrl } from './upload.js';
@@ -77,6 +78,8 @@ export const finalizeBuild = async (
   const baseBranch = opts.upload.baseBranch ?? autodetectBaseBranch();
   const ancestorCommits =
     opts.upload.ancestorCommits ?? autodetectAncestorCommits();
+  const pullRequestUrl =
+    opts.upload.pullRequestUrl ?? autodetectPullRequestUrl();
 
   const resolved: QlipUploadOptions = {
     ...opts.upload,
@@ -84,6 +87,7 @@ export const finalizeBuild = async (
     ...(commit !== undefined ? { commit } : {}),
     ...(baseBranch !== undefined ? { baseBranch } : {}),
     ...(ancestorCommits !== undefined ? { ancestorCommits } : {}),
+    ...(pullRequestUrl !== undefined ? { pullRequestUrl } : {}),
   };
 
   try {
