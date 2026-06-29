@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // Mock git so the fallback path is deterministic regardless of the
 // ambient checkout. In particular, CI PR builds run on a detached HEAD,
@@ -29,6 +32,8 @@ const savedEnv = {
   GITHUB_REF: process.env['GITHUB_REF'],
   GITHUB_REPOSITORY: process.env['GITHUB_REPOSITORY'],
   GITHUB_SERVER_URL: process.env['GITHUB_SERVER_URL'],
+  GITHUB_EVENT_NAME: process.env['GITHUB_EVENT_NAME'],
+  GITHUB_EVENT_PATH: process.env['GITHUB_EVENT_PATH'],
 };
 
 beforeEach(() => {
@@ -39,8 +44,22 @@ beforeEach(() => {
   delete process.env['GITHUB_REF'];
   delete process.env['GITHUB_REPOSITORY'];
   delete process.env['GITHUB_SERVER_URL'];
+  delete process.env['GITHUB_EVENT_NAME'];
+  delete process.env['GITHUB_EVENT_PATH'];
   execFileSyncMock.mockReset();
 });
+
+/** Write a GitHub Actions event payload to a temp file + point
+ *  GITHUB_EVENT_PATH at it; returns the path. */
+function writeEventPayload(payload: unknown): string {
+  const file = join(
+    tmpdir(),
+    `qlip-event-${String(process.hrtime.bigint())}.json`,
+  );
+  writeFileSync(file, JSON.stringify(payload), 'utf-8');
+  process.env['GITHUB_EVENT_PATH'] = file;
+  return file;
+}
 
 afterEach(() => {
   for (const [k, v] of Object.entries(savedEnv)) {
@@ -74,10 +93,42 @@ describe('autodetectBranch', () => {
 });
 
 describe('autodetectCommit', () => {
-  it('prefers GITHUB_SHA', () => {
+  it('prefers GITHUB_SHA on non-PR (push) events', () => {
     process.env['GITHUB_SHA'] = 'abc123def456';
     expect(autodetectCommit()).toBe('abc123def456');
     expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('prefers the PR head SHA over GITHUB_SHA on pull_request events', () => {
+    // GITHUB_SHA is the ephemeral merge commit on PR events; the event
+    // payload's pull_request.head.sha is the real branch commit and
+    // must win so the server's ancestry resolution can match it later.
+    process.env['GITHUB_EVENT_NAME'] = 'pull_request';
+    process.env['GITHUB_SHA'] = 'mergeSHAephemeral';
+    writeEventPayload({ pull_request: { head: { sha: 'realHeadSHA123' } } });
+    expect(autodetectCommit()).toBe('realHeadSHA123');
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('also handles pull_request_target events', () => {
+    process.env['GITHUB_EVENT_NAME'] = 'pull_request_target';
+    process.env['GITHUB_SHA'] = 'mergeSHA';
+    writeEventPayload({ pull_request: { head: { sha: 'targetHeadSHA' } } });
+    expect(autodetectCommit()).toBe('targetHeadSHA');
+  });
+
+  it('falls back to GITHUB_SHA on a PR event whose payload lacks a head SHA', () => {
+    process.env['GITHUB_EVENT_NAME'] = 'pull_request';
+    process.env['GITHUB_SHA'] = 'fallbackSHA';
+    writeEventPayload({ pull_request: {} });
+    expect(autodetectCommit()).toBe('fallbackSHA');
+  });
+
+  it('falls back to GITHUB_SHA when the event file is unreadable', () => {
+    process.env['GITHUB_EVENT_NAME'] = 'pull_request';
+    process.env['GITHUB_EVENT_PATH'] = join(tmpdir(), 'does-not-exist.json');
+    process.env['GITHUB_SHA'] = 'fallbackSHA2';
+    expect(autodetectCommit()).toBe('fallbackSHA2');
   });
 
   it('falls back to the git commit SHA when env var is not set', () => {

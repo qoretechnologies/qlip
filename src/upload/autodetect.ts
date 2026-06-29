@@ -15,6 +15,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 
 /** Server-side cap on the ancestry list (`qlip-server/design/UPLOAD.md`). */
 const MAX_ANCESTOR_COMMITS = 100;
@@ -45,7 +46,44 @@ export const autodetectBranch = (): string | undefined => {
   return branch === 'HEAD' ? undefined : branch;
 };
 
+/**
+ * The PR head SHA from the GitHub Actions event payload, on
+ * `pull_request` / `pull_request_target` events only.
+ *
+ * Why this exists: on those events `GITHUB_SHA` is the EPHEMERAL merge
+ * commit GitHub synthesizes (`refs/pull/N/merge`), which exists in NO
+ * branch's history. qlip-server resolves baselines by walking git
+ * ancestry (`builds.commit IN <rev-list HEAD>`), so a build whose
+ * recorded commit is a merge SHA can never be found as an ancestor of a
+ * later build — the ancestry tier silently never matches PR-built
+ * baselines. The real branch head SHA (`pull_request.head.sha`) is the
+ * commit that actually produced the screenshots and the one that DOES
+ * appear in later ancestry. See qlip-server/design/UPLOAD.md §6.
+ */
+const pullRequestHeadSha = (): string | undefined => {
+  const eventName = process.env['GITHUB_EVENT_NAME'];
+  if (eventName !== 'pull_request' && eventName !== 'pull_request_target') {
+    return undefined;
+  }
+  const eventPath = process.env['GITHUB_EVENT_PATH'];
+  if (!eventPath || eventPath.length === 0) return undefined;
+  try {
+    const payload = JSON.parse(readFileSync(eventPath, 'utf-8')) as {
+      pull_request?: { head?: { sha?: string } };
+    };
+    const sha = payload.pull_request?.head?.sha;
+    return sha && sha.length > 0 ? sha : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 export const autodetectCommit = (): string | undefined => {
+  // Prefer the PR head SHA over GITHUB_SHA: on pull_request events the
+  // latter is the ephemeral merge commit, useless for the server's
+  // ancestry-based baseline resolution (see pullRequestHeadSha).
+  const headSha = pullRequestHeadSha();
+  if (headSha) return headSha;
   const sha = process.env['GITHUB_SHA'];
   if (sha && sha.length > 0) return sha;
   return gitCommand(['rev-parse', 'HEAD']);
