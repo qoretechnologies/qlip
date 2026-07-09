@@ -76,9 +76,16 @@ const ensureBrowserContext = async () => {
   // Vitest 4 deprecated '@vitest/browser/context' in favour of
   // 'vitest/browser'. Try the new module first and fall back for the
   // Vitest 2/3 consumers we still support (see VITEST_2_COMPAT).
-  const browserModule = await import('vitest/browser').catch(
-    () => import('@vitest/browser/context'),
-  );
+  // NOTE: on Vitest 2 the 'vitest/browser' specifier RESOLVES — it is the
+  // internal browser runner entry (startTests etc.), not the user context —
+  // so the import succeeds without `page`/`commands` and a catch-only
+  // fallback never fires, which broke every capture on Vitest 2 consumers.
+  // Fall back on missing exports as well as on resolution failure.
+  const browserModule = await import('vitest/browser')
+    .then((mod) =>
+      mod.page && mod.commands ? mod : import('@vitest/browser/context'),
+    )
+    .catch(() => import('@vitest/browser/context'));
   const { page, commands } = browserModule;
   if (!page || !commands) {
     throw new Error(
