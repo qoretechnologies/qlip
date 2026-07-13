@@ -328,6 +328,22 @@ describe('screenshot capture', () => {
     expect(entry?.storyName).toBe('No Wrap');
   });
 
+  it('captures the running story file path onto the entry', async () => {
+    const { page } = await import('@vitest/browser/context');
+    page.screenshot.mockResolvedValue('ok');
+
+    await captureAutoScreenshot({
+      task: { meta: { storyId: 'button--primary' }, name: 'Primary' },
+      story: { id: 'button--primary', title: 'Components/Button', name: 'Primary' },
+    } as never);
+
+    // The primary source is the vitest worker's current module — here,
+    // this running test file — proving the capture reads it.
+    const filePath = getRuntimeState()?.manifest.entries[0]?.storyFilePath;
+    expect(filePath).toBeDefined();
+    expect(filePath).toContain('screenshot.test');
+  });
+
   it('leaves componentName undefined when task.meta omits it', async () => {
     const { page } = await import('@vitest/browser/context');
     page.screenshot.mockResolvedValue('ok');

@@ -182,6 +182,16 @@ export interface QlipManifestEntry {
    * present. Absent on the manual `screenshot()` path (no test task).
    */
   componentName?: string;
+  /**
+   * Source file the story is defined in, e.g.
+   * "src/components/Button.stories.tsx". Sourced from the running test
+   * module (`__vitest_worker__.filepath`), falling back to
+   * addon-vitest's `task.meta.componentPath`. Lets a downstream consumer
+   * (the dashboard's review summary, an agent acting on rejections) jump
+   * straight to the file. Absent on the manual `screenshot()` path and
+   * when neither source is available.
+   */
+  storyFilePath?: string;
   screenshotName: string;
   path: string;
   viewport: QlipViewport;
