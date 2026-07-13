@@ -149,6 +149,8 @@ const resolveStoryInfo = (ctx: QlipStoryContext) => {
     // task's `meta.componentName` (addon-vitest); the composed story
     // context itself carries no component name.
     componentName: undefined as string | undefined,
+    // Likewise filled at the entry points — the running .stories file.
+    storyFilePath: undefined as string | undefined,
     parameters: ctx.parameters?.qlip,
   };
 };
@@ -414,6 +416,7 @@ const buildEntry = ({
   storyTitle,
   storyName,
   componentName,
+  storyFilePath,
   screenshotName,
   relativePath,
   viewport,
@@ -427,6 +430,7 @@ const buildEntry = ({
   storyTitle?: string;
   storyName?: string;
   componentName?: string;
+  storyFilePath?: string;
   screenshotName: string;
   relativePath: string;
   viewport: QlipViewport;
@@ -446,6 +450,7 @@ const buildEntry = ({
   error,
   timings: { ms: timingsMs },
   ...(componentName ? { componentName } : {}),
+  ...(storyFilePath ? { storyFilePath } : {}),
   ...(logsPath ? { logsPath } : {}),
 });
 
@@ -525,6 +530,7 @@ const captureScreenshot = async ({
         storyTitle: story.title,
         storyName: story.name,
         componentName: story.componentName,
+        storyFilePath: story.storyFilePath,
         screenshotName: name,
         relativePath: usesNamedPath
           ? buildManualScreenshotPath({
@@ -645,6 +651,7 @@ const captureScreenshot = async ({
     storyTitle: story.title,
     storyName: story.name,
     componentName: story.componentName,
+    storyFilePath: story.storyFilePath,
     screenshotName: name,
     relativePath,
     viewport: resolved.viewport,
@@ -757,6 +764,28 @@ const metaComponentName = (ctx: QlipTestContext): string | undefined => {
   return typeof name === 'string' && name.length > 0 ? name : undefined;
 };
 
+/**
+ * The `.stories.tsx` file the running story is defined in. Primary
+ * source is the vitest worker's current test module (addon-vitest reads
+ * the same for its own per-file guards); the fallback is addon-vitest's
+ * `task.meta.componentPath` (the stories file only in the newer
+ * CSF-factory format, a component import path otherwise).
+ */
+const resolveStoryFilePath = (ctx: QlipTestContext): string | undefined => {
+  const workerPath = (
+    globalThis as { __vitest_worker__?: { filepath?: string } }
+  ).__vitest_worker__?.filepath;
+  if (typeof workerPath === 'string' && workerPath.length > 0) {
+    return workerPath;
+  }
+  const componentPath = (
+    ctx.task.meta as { componentPath?: string } | undefined
+  )?.componentPath;
+  return typeof componentPath === 'string' && componentPath.length > 0
+    ? componentPath
+    : undefined;
+};
+
 export const captureAutoScreenshot = async (ctx: QlipTestContext) => {
   const runtime = initRuntimeState();
   if (!runtime) {
@@ -775,6 +804,7 @@ export const captureAutoScreenshot = async (ctx: QlipTestContext) => {
     story.id = metaStoryId;
   }
   story.componentName = metaComponentName(ctx);
+  story.storyFilePath = resolveStoryFilePath(ctx);
   if (story.id && (!story.title || !story.name)) {
     const storeStory = readStoryFromStore(story.id);
     if (storeStory?.title && !story.title) {
@@ -821,6 +851,7 @@ export const captureErrorScreenshot = async (ctx: QlipTestContext) => {
     story.id = errorMetaStoryId;
   }
   story.componentName = metaComponentName(ctx);
+  story.storyFilePath = resolveStoryFilePath(ctx);
   const params = story.parameters;
   const resolvedOptions = resolveQlipOptions({ defaults: runtime.config.defaults, story: params });
   if (resolvedOptions.skip) {
