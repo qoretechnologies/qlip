@@ -70,14 +70,15 @@ export const qlipVitestPlugin = (
         new URL('../runtime/setup.js', import.meta.url),
       );
       const setupFile = existsSync(setupTs) ? setupTs : setupJs;
-      const existingSetupFiles = config.test?.setupFiles;
-      const setupFiles = new Set<string>();
-      if (typeof existingSetupFiles === 'string') {
-        setupFiles.add(existingSetupFiles);
-      } else if (Array.isArray(existingSetupFiles)) {
-        existingSetupFiles.forEach((file) => setupFiles.add(file));
-      }
-      setupFiles.add(setupFile);
+      // Return ONLY our own entry — never copy the consumer's existing
+      // `setupFiles` in here. Vite merges a `config` hook's return by
+      // *concatenating* arrays onto the consumer config, so any entry we
+      // echo back is added a second time. Echoing the consumer's setup
+      // file is what wedged Storybook browser collection in qlip#17
+      // (the setup ran twice, double-registering annotations/hooks).
+      // Returning `[setupFile]` lets Vite append us exactly once,
+      // leaving every consumer entry present exactly once. Same reasoning
+      // for `globalSetup` and `reporters` below.
 
       // Wire the upload reporter into Vitest when upload is configured.
       // We add ourselves alongside the user's reporters rather than
@@ -90,12 +91,15 @@ export const qlipVitestPlugin = (
       // `implements Reporter` so we can stay compat across V2/V4
       // interface drift). Casting through `Reporter[]` keeps the
       // returned config compatible with Vitest's expected shape.
+      // Only our additions — Vite concatenates onto the consumer's
+      // reporters, so copying `baseReporters` here would duplicate each
+      // one (qlip#17). The one case we must handle: when the consumer set
+      // no reporters, Vitest's implicit 'default' would be replaced by our
+      // sole entry — so re-add 'default' in exactly that case to avoid
+      // silencing console output. (Vite's merge arraifies a single
+      // consumer reporter, so we never need to normalise it ourselves.)
       const reportersList = (
-        baseReporters
-          ? Array.isArray(baseReporters)
-            ? [...baseReporters]
-            : [baseReporters]
-          : ['default']
+        baseReporters ? [] : ['default']
       ) as import('vitest/reporters').Reporter[];
 
       // 2026-05-23 — Vitest 2 compat. The `configureVitest` plugin
@@ -174,14 +178,8 @@ export const qlipVitestPlugin = (
       const globalSetupFile = existsSync(globalSetupTs)
         ? globalSetupTs
         : globalSetupJs;
-      const existingGlobalSetup = config.test?.globalSetup;
-      const globalSetupFiles = new Set<string>();
-      if (typeof existingGlobalSetup === 'string') {
-        globalSetupFiles.add(existingGlobalSetup);
-      } else if (Array.isArray(existingGlobalSetup)) {
-        existingGlobalSetup.forEach((file) => globalSetupFiles.add(file));
-      }
-      globalSetupFiles.add(globalSetupFile);
+      // Only our own entry — see the setupFiles note. Copying the
+      // consumer's `globalSetup` here would double-run their setup.
 
       // Path to qlip's own package root, computed from this file's
       // URL. Used to add ourselves to vite's `server.fs.allow` so the
@@ -212,8 +210,8 @@ export const qlipVitestPlugin = (
           __QLIP_CONFIG__: JSON.stringify(runtimeConfig),
         },
         test: {
-          setupFiles: Array.from(setupFiles),
-          globalSetup: Array.from(globalSetupFiles),
+          setupFiles: [setupFile],
+          globalSetup: [globalSetupFile],
           reporters: reportersList,
         },
       };
