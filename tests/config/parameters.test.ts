@@ -169,4 +169,45 @@ describe('resolveQlipOptions', () => {
       consoleLogExcludePatterns: [],
     });
   });
+
+  it('resolves disableBackdropFilter with override > story > defaults', () => {
+    const base = {
+      outputDir: './qlip/screenshots',
+      viewport: { width: 1200, height: 800 },
+      skip: false,
+      disableAnimations: false,
+      pauseAnimationsAtEnd: false,
+      disableBackdropFilter: true,
+      captureOnError: false,
+      waitForIdleMs: 300,
+      maxWaitForIdleMs: 2000,
+      ignoreElements: [],
+      auto: true,
+      manual: true,
+      error: true,
+      captureConsole: true,
+      captureConsoleLevels: ['error'] as const,
+      maxConsoleLogs: 50,
+      consoleLogExcludePatterns: [],
+    };
+    // Default wins when nothing overrides it.
+    expect(
+      resolveQlipOptions({ defaults: base }).disableBackdropFilter,
+    ).toBe(true);
+    // A story param overrides the default.
+    expect(
+      resolveQlipOptions({
+        defaults: base,
+        story: { disableBackdropFilter: false },
+      }).disableBackdropFilter,
+    ).toBe(false);
+    // An explicit override beats both.
+    expect(
+      resolveQlipOptions({
+        defaults: base,
+        story: { disableBackdropFilter: false },
+        override: { disableBackdropFilter: true },
+      }).disableBackdropFilter,
+    ).toBe(true);
+  });
 });

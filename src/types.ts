@@ -8,6 +8,17 @@ export interface QlipCaptureOptions {
   viewport?: QlipViewport;
   disableAnimations?: boolean;
   pauseAnimationsAtEnd?: boolean;
+  /**
+   * Strip `backdrop-filter` from the page for the duration of the
+   * capture. Headless Chromium can't composite a backdrop blur, so
+   * blurred overlays (reqore panels/popovers/drawers, frosted modals)
+   * render as opaque **black rectangles** in the screenshot. The blur is
+   * decorative and never the thing under visual test, so this defaults to
+   * `true`; set `false` to keep it.
+   *
+   * @default true
+   */
+  disableBackdropFilter?: boolean;
   waitForIdleMs?: number;
   maxWaitForIdleMs?: number;
   ignoreElements?: string[];
