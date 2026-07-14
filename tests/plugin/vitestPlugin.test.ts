@@ -1,106 +1,120 @@
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import { resolveConfig } from 'vite';
+/**
+ * Regression tests for qlip#17 — the plugin's `config` hook must add
+ * qlip's own `setupFiles` / `globalSetup` / `reporters` WITHOUT
+ * duplicating the consumer's entries.
+ *
+ * Vite applies a `config` hook by `mergeConfig(userConfig, pluginResult)`,
+ * and `mergeConfig` *concatenates* arrays — so any consumer entry the
+ * plugin echoes back in its return is added a second time. The confirmed
+ * failure was a consumer `setupFiles` running twice, which wedged
+ * Storybook browser collection.
+ *
+ * These tests replicate Vite's real merge and assert that every entry —
+ * the consumer's and qlip's — appears in the resolved config exactly
+ * once.
+ */
+
+import { describe, expect, it } from 'vitest';
+import { mergeConfig } from 'vite';
 import { qlipVitestPlugin } from '../../src/plugin/vitestPlugin.js';
 
-const testRoots: string[] = [];
+type TTestConfig = { test?: Record<string, unknown> } & Record<string, unknown>;
 
-const resolvePluginConfig = async (test: Record<string, unknown>) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'qlip-plugin-config-'));
-  testRoots.push(root);
-  return resolveConfig(
-    {
-      root,
-      plugins: [qlipVitestPlugin({ outputDir: path.join(root, 'output') })],
-      test,
-    } as Parameters<typeof resolveConfig>[0],
-    'serve',
-  ) as Promise<
-    Awaited<ReturnType<typeof resolveConfig>> & {
-      test: Record<string, unknown>;
-    }
-  >;
-};
+/** Invoke the plugin's `config` hook the way Vite does, then merge. */
+function resolveWithPlugin(userConfig: TTestConfig): TTestConfig {
+  const plugin = qlipVitestPlugin({ buildId: 'test-build' });
+  const hook = plugin.config;
+  const handler = typeof hook === 'function' ? hook : hook?.handler;
+  if (!handler) throw new Error('plugin exposes no config hook');
+  const result = handler(userConfig as never, {
+    command: 'serve',
+    mode: 'test',
+  } as never) as TTestConfig;
+  // Vite: `config = mergeConfig(config, pluginResult)` — user first.
+  return mergeConfig(userConfig, result) as TTestConfig;
+}
 
-afterEach(async () => {
-  await Promise.all(
-    testRoots
-      .splice(0)
-      .map((root) => rm(root, { recursive: true, force: true })),
-  );
-});
+const occurrences = <T>(arr: T[], pred: (v: T) => boolean): number =>
+  arr.filter(pred).length;
 
-describe('qlipVitestPlugin configuration merge', () => {
-  it.each([
-    ['one string', 'consumer-setup.ts'],
-    ['multiple values', ['consumer-setup.ts', 'second-setup.ts']],
-  ])('preserves %s setup files exactly once', async (_label, setupFiles) => {
-    const config = await resolvePluginConfig({ setupFiles });
-    const resolved = config.test.setupFiles as string[];
+const QLIP_SETUP = /runtime[\\/]setup\.(ts|js)$/;
+const QLIP_GLOBAL_SETUP = /runtime[\\/]global-setup\.(ts|js)$/;
+const isQlipReporter = (r: unknown): boolean =>
+  typeof r === 'object' &&
+  r !== null &&
+  (r as { constructor?: { name?: string } }).constructor?.name ===
+    'QlipUploadReporter';
 
-    expect(
-      resolved.filter((file) => file === 'consumer-setup.ts'),
-    ).toHaveLength(1);
-    if (Array.isArray(setupFiles)) {
-      expect(
-        resolved.filter((file) => file === 'second-setup.ts'),
-      ).toHaveLength(1);
-    }
-    expect(
-      resolved.filter((file) => file.endsWith('/runtime/setup.ts')),
-    ).toHaveLength(1);
-  });
-
-  it('preserves consumer global setup exactly once', async () => {
-    const config = await resolvePluginConfig({
-      globalSetup: ['consumer-global.ts'],
+describe('qlipVitestPlugin config hook — no duplicate merge (qlip#17)', () => {
+  it('appends its setup file without duplicating a single consumer entry', () => {
+    const merged = resolveWithPlugin({
+      test: { setupFiles: ['.storybook/vitest.setup.ts'] },
     });
-    const resolved = config.test.globalSetup as string[];
-
+    const setupFiles = merged.test?.setupFiles as string[];
     expect(
-      resolved.filter((file) => file === 'consumer-global.ts'),
-    ).toHaveLength(1);
-    expect(
-      resolved.filter((file) => file.endsWith('/runtime/global-setup.ts')),
-    ).toHaveLength(1);
+      occurrences(setupFiles, (f) => f === '.storybook/vitest.setup.ts'),
+    ).toBe(1);
+    expect(occurrences(setupFiles, (f) => QLIP_SETUP.test(f))).toBe(1);
   });
 
-  it.each([
-    ['string', 'verbose'],
-    ['tuple', [['json', { outputFile: 'results.json' }]]],
-    ['instance', [{ onFinished: () => undefined }]],
-  ])(
-    'preserves a consumer %s reporter exactly once',
-    async (_label, reporters) => {
-      const config = await resolvePluginConfig({ reporters });
-      const resolved = config.test.reporters as unknown[];
+  it('preserves multiple consumer setup files, each exactly once', () => {
+    const merged = resolveWithPlugin({
+      test: { setupFiles: ['a.setup.ts', 'b.setup.ts'] },
+    });
+    const setupFiles = merged.test?.setupFiles as string[];
+    expect(occurrences(setupFiles, (f) => f === 'a.setup.ts')).toBe(1);
+    expect(occurrences(setupFiles, (f) => f === 'b.setup.ts')).toBe(1);
+    expect(occurrences(setupFiles, (f) => QLIP_SETUP.test(f))).toBe(1);
+  });
 
-      expect(
-        resolved.filter(
-          (reporter) => reporter === reporters || reporter === reporters[0],
-        ),
-      ).toHaveLength(1);
-      expect(
-        resolved.filter(
-          (reporter) => reporter?.constructor?.name === 'QlipUploadReporter',
-        ),
-      ).toHaveLength(1);
-    },
-  );
+  it('adds its setup file when the consumer declared none', () => {
+    const merged = resolveWithPlugin({ test: {} });
+    const setupFiles = merged.test?.setupFiles as string[];
+    expect(occurrences(setupFiles, (f) => QLIP_SETUP.test(f))).toBe(1);
+    expect(setupFiles).toHaveLength(1);
+  });
 
-  it('keeps Vitest default output when no consumer reporter is configured', async () => {
-    const config = await resolvePluginConfig({});
-    const resolved = config.test.reporters as unknown[];
+  it('does not duplicate a string consumer globalSetup', () => {
+    const merged = resolveWithPlugin({
+      test: { globalSetup: 'my.global-setup.ts' },
+    });
+    const globalSetup = merged.test?.globalSetup as string[];
+    expect(occurrences(globalSetup, (f) => f === 'my.global-setup.ts')).toBe(1);
+    expect(occurrences(globalSetup, (f) => QLIP_GLOBAL_SETUP.test(f))).toBe(1);
+  });
 
-    expect(resolved.filter((reporter) => reporter === 'default')).toHaveLength(
-      1,
-    );
+  it('does not duplicate an array consumer globalSetup', () => {
+    const merged = resolveWithPlugin({
+      test: { globalSetup: ['gs-a.ts', 'gs-b.ts'] },
+    });
+    const globalSetup = merged.test?.globalSetup as string[];
+    expect(occurrences(globalSetup, (f) => f === 'gs-a.ts')).toBe(1);
+    expect(occurrences(globalSetup, (f) => f === 'gs-b.ts')).toBe(1);
+    expect(occurrences(globalSetup, (f) => QLIP_GLOBAL_SETUP.test(f))).toBe(1);
+  });
+
+  it('keeps a consumer string reporter once and adds qlip once', () => {
+    const merged = resolveWithPlugin({ test: { reporters: ['default'] } });
+    const reporters = merged.test?.reporters as unknown[];
+    expect(occurrences(reporters, (r) => r === 'default')).toBe(1);
+    expect(occurrences(reporters, isQlipReporter)).toBe(1);
+  });
+
+  it('keeps a consumer tuple reporter intact and once', () => {
+    const merged = resolveWithPlugin({
+      test: { reporters: [['junit', { outputFile: 'out.xml' }]] },
+    });
+    const reporters = merged.test?.reporters as unknown[];
     expect(
-      resolved.filter(
-        (reporter) => reporter?.constructor?.name === 'QlipUploadReporter',
-      ),
-    ).toHaveLength(1);
+      occurrences(reporters, (r) => Array.isArray(r) && r[0] === 'junit'),
+    ).toBe(1);
+    expect(occurrences(reporters, isQlipReporter)).toBe(1);
+  });
+
+  it("re-adds 'default' so a consumer with no reporters isn't silenced", () => {
+    const merged = resolveWithPlugin({ test: {} });
+    const reporters = merged.test?.reporters as unknown[];
+    expect(occurrences(reporters, (r) => r === 'default')).toBe(1);
+    expect(occurrences(reporters, isQlipReporter)).toBe(1);
   });
 });
