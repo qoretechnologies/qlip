@@ -237,22 +237,59 @@ const shouldCaptureOnError = (
   story?: QlipParameters,
 ) => story?.captureOnError ?? defaults.captureOnError;
 
-const applyAnimationControl = ({
+/**
+ * Inject a capture-time stylesheet that neutralises things which make a
+ * screenshot non-deterministic or plain wrong: in-flight animations /
+ * transitions and — the reason `disableBackdropFilter` exists —
+ * `backdrop-filter`, which headless Chromium renders as an opaque black
+ * rectangle because it can't sample the backdrop. Exported for unit
+ * testing.
+ */
+export const applyCaptureStyleOverrides = ({
   disableAnimations,
   pauseAnimationsAtEnd,
+  disableBackdropFilter,
 }: {
   disableAnimations: boolean;
   pauseAnimationsAtEnd: boolean;
+  disableBackdropFilter: boolean;
 }) => {
   if (!globalThis.document) {
     return;
   }
 
   const doc = globalThis.document;
-  const id = '__qlip-animation-control';
+  const id = '__qlip-capture-style-overrides';
   const existing = doc.getElementById(id);
 
-  if (!disableAnimations && !pauseAnimationsAtEnd) {
+  const rules: string[] = [];
+  if (disableAnimations) {
+    rules.push(`
+      *, *::before, *::after {
+        animation: none !important;
+        transition: none !important;
+        scroll-behavior: auto !important;
+      }
+    `);
+  } else if (pauseAnimationsAtEnd) {
+    rules.push(`
+      *, *::before, *::after {
+        animation-play-state: paused !important;
+        transition-duration: 0s !important;
+        transition-delay: 0s !important;
+      }
+    `);
+  }
+  if (disableBackdropFilter) {
+    rules.push(`
+      *, *::before, *::after {
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+      }
+    `);
+  }
+
+  if (rules.length === 0) {
     if (existing) {
       existing.remove();
     }
@@ -261,23 +298,7 @@ const applyAnimationControl = ({
 
   const style = existing ?? doc.createElement('style');
   style.id = id;
-  if (disableAnimations) {
-    style.textContent = `
-      *, *::before, *::after {
-        animation: none !important;
-        transition: none !important;
-        scroll-behavior: auto !important;
-      }
-    `;
-  } else {
-    style.textContent = `
-      *, *::before, *::after {
-        animation-play-state: paused !important;
-        transition-duration: 0s !important;
-        transition-delay: 0s !important;
-      }
-    `;
-  }
+  style.textContent = rules.join('\n');
   if (!existing) {
     doc.head.appendChild(style);
   }
@@ -600,9 +621,10 @@ const captureScreenshot = async ({
   let cleanupMasks: (() => void) | null = null;
   try {
     await page.viewport(resolved.viewport.width, resolved.viewport.height);
-    applyAnimationControl({
+    applyCaptureStyleOverrides({
       disableAnimations: resolved.disableAnimations,
       pauseAnimationsAtEnd: resolved.pauseAnimationsAtEnd,
+      disableBackdropFilter: resolved.disableBackdropFilter,
     });
     await waitForDomIdle(resolved.waitForIdleMs, resolved.maxWaitForIdleMs);
     cleanupMasks = applyIgnoreMasks(resolved.ignoreElements);

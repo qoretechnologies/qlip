@@ -5,6 +5,7 @@ export interface QlipResolvedOptions {
   viewport: { width: number; height: number };
   disableAnimations: boolean;
   pauseAnimationsAtEnd: boolean;
+  disableBackdropFilter: boolean;
   waitForIdleMs: number;
   maxWaitForIdleMs: number;
   ignoreElements: string[];
@@ -37,6 +38,10 @@ export const resolveQlipOptions = ({
       override?.pauseAnimationsAtEnd ??
       story?.pauseAnimationsAtEnd ??
       defaults.pauseAnimationsAtEnd,
+    disableBackdropFilter:
+      override?.disableBackdropFilter ??
+      story?.disableBackdropFilter ??
+      defaults.disableBackdropFilter,
     waitForIdleMs:
       override?.waitForIdleMs ??
       story?.waitForIdleMs ??

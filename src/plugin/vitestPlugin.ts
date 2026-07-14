@@ -48,6 +48,9 @@ export const qlipVitestPlugin = (
           skip: false,
           disableAnimations: options.disableAnimations ?? false,
           pauseAnimationsAtEnd: options.pauseAnimationsAtEnd ?? false,
+          // On by default — a black-box `backdrop-filter` artifact is
+          // never a wanted baseline. See QlipCaptureOptions.
+          disableBackdropFilter: options.disableBackdropFilter ?? true,
           captureOnError: options.captureOnError ?? false,
           waitForIdleMs: options.waitForIdleMs ?? 300,
           maxWaitForIdleMs: options.maxWaitForIdleMs ?? 2000,

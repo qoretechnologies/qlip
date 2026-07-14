@@ -174,6 +174,7 @@ const buildResolvedDefaults = (
     skip: false,
     disableAnimations: override?.disableAnimations ?? false,
     pauseAnimationsAtEnd: override?.pauseAnimationsAtEnd ?? false,
+    disableBackdropFilter: override?.disableBackdropFilter ?? true,
     captureOnError: override?.captureOnError ?? false,
     waitForIdleMs: override?.waitForIdleMs ?? 300,
     maxWaitForIdleMs: override?.maxWaitForIdleMs ?? 2000,
