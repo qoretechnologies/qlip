@@ -18,9 +18,7 @@ import { stashFinalizeConfig } from '../runtime/global-setup.js';
 
 const normalizePath = (value: string) => value.replace(/\\/g, '/');
 
-export const qlipVitestPlugin = (
-  options: QlipPluginOptions = {},
-): Plugin => {
+export const qlipVitestPlugin = (options: QlipPluginOptions = {}): Plugin => {
   const buildId = options.buildId ?? generateBuildId();
   let runtimeConfig: QlipRuntimeConfig | null = null;
   // Plugin instance state — `configureVitest` may fire once per project
@@ -70,15 +68,6 @@ export const qlipVitestPlugin = (
         new URL('../runtime/setup.js', import.meta.url),
       );
       const setupFile = existsSync(setupTs) ? setupTs : setupJs;
-      const existingSetupFiles = config.test?.setupFiles;
-      const setupFiles = new Set<string>();
-      if (typeof existingSetupFiles === 'string') {
-        setupFiles.add(existingSetupFiles);
-      } else if (Array.isArray(existingSetupFiles)) {
-        existingSetupFiles.forEach((file) => setupFiles.add(file));
-      }
-      setupFiles.add(setupFile);
-
       // Wire the upload reporter into Vitest when upload is configured.
       // We add ourselves alongside the user's reporters rather than
       // replacing them. When no reporter is set, Vitest's default is
@@ -91,11 +80,7 @@ export const qlipVitestPlugin = (
       // interface drift). Casting through `Reporter[]` keeps the
       // returned config compatible with Vitest's expected shape.
       const reportersList = (
-        baseReporters
-          ? Array.isArray(baseReporters)
-            ? [...baseReporters]
-            : [baseReporters]
-          : ['default']
+        baseReporters ? [] : ['default']
       ) as import('vitest/reporters').Reporter[];
 
       // 2026-05-23 — Vitest 2 compat. The `configureVitest` plugin
@@ -174,15 +159,6 @@ export const qlipVitestPlugin = (
       const globalSetupFile = existsSync(globalSetupTs)
         ? globalSetupTs
         : globalSetupJs;
-      const existingGlobalSetup = config.test?.globalSetup;
-      const globalSetupFiles = new Set<string>();
-      if (typeof existingGlobalSetup === 'string') {
-        globalSetupFiles.add(existingGlobalSetup);
-      } else if (Array.isArray(existingGlobalSetup)) {
-        existingGlobalSetup.forEach((file) => globalSetupFiles.add(file));
-      }
-      globalSetupFiles.add(globalSetupFile);
-
       // Path to qlip's own package root, computed from this file's
       // URL. Used to add ourselves to vite's `server.fs.allow` so the
       // browser-mode runtime can fetch our `runtime/setup.js` even
@@ -212,8 +188,10 @@ export const qlipVitestPlugin = (
           __QLIP_CONFIG__: JSON.stringify(runtimeConfig),
         },
         test: {
-          setupFiles: Array.from(setupFiles),
-          globalSetup: Array.from(globalSetupFiles),
+          // Vite merges plugin arrays with the consumer's arrays. Returning
+          // consumer entries here would execute each of them twice.
+          setupFiles: [setupFile],
+          globalSetup: [globalSetupFile],
           reporters: reportersList,
         },
       };
@@ -252,9 +230,7 @@ export const qlipVitestPlugin = (
       cfg.reporters.push(
         new QlipUploadReporter({
           runtime: runtimeConfig,
-          ...(options.upload !== undefined
-            ? { upload: options.upload }
-            : {}),
+          ...(options.upload !== undefined ? { upload: options.upload } : {}),
         }),
       );
       reporterRegistered = true;

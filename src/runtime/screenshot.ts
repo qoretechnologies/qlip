@@ -73,19 +73,9 @@ const ensureBrowserContext = async () => {
     );
   }
 
-  // Vitest 4 deprecated '@vitest/browser/context' in favour of
-  // 'vitest/browser'. Try the new module first and fall back for the
-  // Vitest 2/3 consumers we still support (see VITEST_2_COMPAT).
-  // NOTE: on Vitest 2 the 'vitest/browser' specifier RESOLVES — it is the
-  // internal browser runner entry (startTests etc.), not the user context —
-  // so the import succeeds without `page`/`commands` and a catch-only
-  // fallback never fires, which broke every capture on Vitest 2 consumers.
-  // Fall back on missing exports as well as on resolution failure.
-  const browserModule = await import('vitest/browser')
-    .then((mod) =>
-      mod.page && mod.commands ? mod : import('@vitest/browser/context'),
-    )
-    .catch(() => import('@vitest/browser/context'));
+  // This compatibility export remains available throughout Qlip's supported
+  // Vitest 2-4 range; `vitest/browser` cannot be statically resolved by V3.
+  const browserModule = await import('@vitest/browser/context');
   const { page, commands } = browserModule;
   if (!page || !commands) {
     throw new Error(
@@ -198,7 +188,9 @@ const deriveTitleNameFromStoryId = (
 const readStoryFromStore = (storyId: string) => {
   const globalAny = globalThis as {
     __STORYBOOK_PREVIEW__?: {
-      storyStore?: { storyIndex?: Record<string, unknown> | { v?: Record<string, unknown> } };
+      storyStore?: {
+        storyIndex?: Record<string, unknown> | { v?: Record<string, unknown> };
+      };
       storyIndex?: Record<string, unknown> | { v?: Record<string, unknown> };
     };
     __STORYBOOK_STORY_STORE__?: {
@@ -211,18 +203,28 @@ const readStoryFromStore = (storyId: string) => {
     globalAny.__STORYBOOK_STORY_STORE__;
   const previewIndex = globalAny.__STORYBOOK_PREVIEW__?.storyIndex;
   const rawIndex =
-    (store?.storyIndex as { v?: Record<string, unknown> } | Record<string, unknown> | undefined)?.v ??
+    (
+      store?.storyIndex as
+        | { v?: Record<string, unknown> }
+        | Record<string, unknown>
+        | undefined
+    )?.v ??
     store?.storyIndex ??
-    (previewIndex as { v?: Record<string, unknown> } | Record<string, unknown> | undefined)?.v ??
+    (
+      previewIndex as
+        | { v?: Record<string, unknown> }
+        | Record<string, unknown>
+        | undefined
+    )?.v ??
     previewIndex;
 
   const entryMap =
     (rawIndex as { entries?: Record<string, unknown> } | undefined)?.entries ??
     (rawIndex as Record<string, unknown> | undefined);
 
-  const entry = (entryMap as { [key: string]: { title?: string; name?: string } } | undefined)?.[
-    storyId
-  ];
+  const entry = (
+    entryMap as { [key: string]: { title?: string; name?: string } } | undefined
+  )?.[storyId];
   if (!entry) {
     return null;
   }
@@ -339,12 +341,15 @@ const waitForDomIdle = async (idleMs: number, maxWaitMs: number) => {
       characterData: true,
     });
 
-    const checkInterval = realSetInterval(() => {
-      const now = monotonicNow();
-      if (now - lastChange >= idleMs || now - start >= resolvedMaxWait) {
-        finish();
-      }
-    }, Math.min(50, idleMs));
+    const checkInterval = realSetInterval(
+      () => {
+        const now = monotonicNow();
+        if (now - lastChange >= idleMs || now - start >= resolvedMaxWait) {
+          finish();
+        }
+      },
+      Math.min(50, idleMs),
+    );
   });
 };
 
@@ -387,7 +392,9 @@ const applyIgnoreMasks = (selectors: string[]) => {
 const pickUniqueErrorName = (entries: QlipManifestEntry[]) => {
   const reserved = new Set(
     entries
-      .filter((entry) => entry.screenshotName.startsWith(AUTO_ERROR_SCREENSHOT_BASE))
+      .filter((entry) =>
+        entry.screenshotName.startsWith(AUTO_ERROR_SCREENSHOT_BASE),
+      )
       .map((entry) => entry.screenshotName),
   );
   if (!reserved.has(AUTO_ERROR_SCREENSHOT_BASE)) {
@@ -794,7 +801,10 @@ export const captureAutoScreenshot = async (ctx: QlipTestContext) => {
   const storyContext = ctx.story ?? {};
   const story = resolveStoryInfo(storyContext);
   const params = story.parameters;
-  const resolvedOptions = resolveQlipOptions({ defaults: runtime.config.defaults, story: params });
+  const resolvedOptions = resolveQlipOptions({
+    defaults: runtime.config.defaults,
+    story: params,
+  });
   if (!resolvedOptions.auto) {
     return;
   }
@@ -853,7 +863,10 @@ export const captureErrorScreenshot = async (ctx: QlipTestContext) => {
   story.componentName = metaComponentName(ctx);
   story.storyFilePath = resolveStoryFilePath(ctx);
   const params = story.parameters;
-  const resolvedOptions = resolveQlipOptions({ defaults: runtime.config.defaults, story: params });
+  const resolvedOptions = resolveQlipOptions({
+    defaults: runtime.config.defaults,
+    story: params,
+  });
   if (resolvedOptions.skip) {
     return;
   }
@@ -914,8 +927,7 @@ export const captureErrorScreenshot = async (ctx: QlipTestContext) => {
  * is what gets displayed.
  */
 const ANSI_ESCAPE_RE = /\[[0-9;]*[A-Za-z]/g;
-const stripAnsi = (value: string): string =>
-  value.replace(ANSI_ESCAPE_RE, '');
+const stripAnsi = (value: string): string => value.replace(ANSI_ESCAPE_RE, '');
 
 /**
  * Pull the first failure-error from a Vitest task result. Vitest
