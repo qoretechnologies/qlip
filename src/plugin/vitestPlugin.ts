@@ -18,9 +18,7 @@ import { stashFinalizeConfig } from '../runtime/global-setup.js';
 
 const normalizePath = (value: string) => value.replace(/\\/g, '/');
 
-export const qlipVitestPlugin = (
-  options: QlipPluginOptions = {},
-): Plugin => {
+export const qlipVitestPlugin = (options: QlipPluginOptions = {}): Plugin => {
   const buildId = options.buildId ?? generateBuildId();
   let runtimeConfig: QlipRuntimeConfig | null = null;
   // Plugin instance state — `configureVitest` may fire once per project
@@ -253,9 +251,7 @@ export const qlipVitestPlugin = (
       cfg.reporters.push(
         new QlipUploadReporter({
           runtime: runtimeConfig,
-          ...(options.upload !== undefined
-            ? { upload: options.upload }
-            : {}),
+          ...(options.upload !== undefined ? { upload: options.upload } : {}),
         }),
       );
       reporterRegistered = true;
