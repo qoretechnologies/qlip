@@ -14,6 +14,9 @@ vi.mock('@vitest/browser/context', () => {
   };
   const commands = {
     writeFile: vi.fn(),
+    // Vitest 4+ built-in used by the retry-mask fix in
+    // captureAutoScreenshot to delete PNGs for pruned error entries.
+    removeFile: vi.fn(),
   };
   return { page, commands };
 });
@@ -59,6 +62,7 @@ beforeEach(async () => {
   page.viewport.mockReset();
   page.screenshot.mockReset();
   commands.writeFile.mockReset();
+  commands.removeFile.mockReset();
 });
 
 describe('screenshot capture', () => {
@@ -207,6 +211,127 @@ describe('screenshot capture', () => {
     // No error info available → field stays null rather than
     // carrying a misleading placeholder.
     expect(entry?.error).toBeNull();
+  });
+
+  it('prunes stale error entries when a retry succeeds', async () => {
+    const { page, commands } = await import('@vitest/browser/context');
+    page.screenshot.mockResolvedValue('ok');
+    globalThis.__QLIP_CONFIG__ = {
+      ...runtimeConfig,
+      defaults: { ...runtimeConfig.defaults, captureOnError: true },
+    };
+
+    // Attempt 1 — the play test failed. Both the auto capture (DOM
+    // settled before the assertion threw) and the error capture ran.
+    await captureAutoScreenshot({
+      task: {
+        meta: { storyId: 'example--page' },
+        name: 'Logged In',
+        suite: { name: 'Example/Page' },
+        result: { state: 'fail', retryCount: 0 },
+      },
+      story: { id: 'example--page' },
+    } as never);
+    await captureErrorScreenshot({
+      task: {
+        meta: { storyId: 'example--page' },
+        name: 'Logged In',
+        suite: { name: 'Example/Page' },
+        result: {
+          state: 'fail',
+          retryCount: 0,
+          errors: [{ message: 'flake', stack: '' }],
+        },
+      },
+      story: { id: 'example--page' },
+    } as never);
+
+    // Sanity: both entries are in the manifest and the error entry
+    // has a `path` we expect to be deleted.
+    const stateBefore = getRuntimeState();
+    expect(stateBefore?.manifest.entries).toHaveLength(2);
+    const errorEntryPath = stateBefore?.manifest.entries.find(
+      (e) => e.kind === 'error',
+    )?.path;
+    expect(errorEntryPath).toMatch(/\/error\//);
+
+    // Attempt 2 — the retry passed. Vitest bumps `retryCount` and
+    // sets state to 'pass'. captureAutoScreenshot should prune the
+    // stale error entry and remove its PNG from disk.
+    commands.removeFile.mockResolvedValue(undefined);
+    await captureAutoScreenshot({
+      task: {
+        meta: { storyId: 'example--page' },
+        name: 'Logged In',
+        suite: { name: 'Example/Page' },
+        result: { state: 'pass', retryCount: 1 },
+      },
+      story: { id: 'example--page' },
+    } as never);
+
+    const stateAfter = getRuntimeState();
+    // Two auto entries (attempt 1 + attempt 2), zero error entries.
+    const kinds = stateAfter?.manifest.entries.map((e) => e.kind) ?? [];
+    expect(kinds).toEqual(['auto', 'auto']);
+    // `failed` counter walked back down as errors were pruned.
+    expect(stateAfter?.manifest.stats.failed).toBe(0);
+    // On-disk PNG for the pruned error entry was removed.
+    expect(commands.removeFile).toHaveBeenCalledTimes(1);
+    expect(commands.removeFile).toHaveBeenCalledWith(
+      expect.stringContaining(errorEntryPath!),
+    );
+  });
+
+  it('does not prune error entries when the test genuinely failed', async () => {
+    const { page, commands } = await import('@vitest/browser/context');
+    page.screenshot.mockResolvedValue('ok');
+    globalThis.__QLIP_CONFIG__ = {
+      ...runtimeConfig,
+      defaults: { ...runtimeConfig.defaults, captureOnError: true },
+    };
+
+    // Attempt 1 fails.
+    await captureAutoScreenshot({
+      task: {
+        meta: { storyId: 'example--page' },
+        name: 'Logged In',
+        suite: { name: 'Example/Page' },
+        result: { state: 'fail', retryCount: 0 },
+      },
+      story: { id: 'example--page' },
+    } as never);
+    await captureErrorScreenshot({
+      task: {
+        meta: { storyId: 'example--page' },
+        name: 'Logged In',
+        suite: { name: 'Example/Page' },
+        result: {
+          state: 'fail',
+          retryCount: 0,
+          errors: [{ message: 'real bug', stack: '' }],
+        },
+      },
+      story: { id: 'example--page' },
+    } as never);
+
+    // Attempt 2 also fails — no retry-mask, error must stay.
+    await captureAutoScreenshot({
+      task: {
+        meta: { storyId: 'example--page' },
+        name: 'Logged In',
+        suite: { name: 'Example/Page' },
+        result: { state: 'fail', retryCount: 1 },
+      },
+      story: { id: 'example--page' },
+    } as never);
+
+    const state = getRuntimeState();
+    const errorEntries = state?.manifest.entries.filter(
+      (e) => e.kind === 'error',
+    );
+    expect(errorEntries).toHaveLength(1);
+    // removeFile never called — the failure is genuine.
+    expect(commands.removeFile).not.toHaveBeenCalled();
   });
 
   it('records failures when capture throws', async () => {

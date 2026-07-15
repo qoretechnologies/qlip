@@ -117,6 +117,50 @@ export const pushEntry = (
   state.manifest.entries.push(entry);
 };
 
+/**
+ * Remove every `error`-kind entry for `storyId` from the in-memory
+ * manifest. Returns the removed entries so the caller can delete their
+ * on-disk PNG (and log) files.
+ *
+ * Used by the retry-mask fix in `afterEach`: when a test attempt
+ * PASSES after one or more failed attempts (vitest `retry > 0`), the
+ * error captures from those earlier attempts were already pushed to
+ * the manifest. Left alone, they get uploaded and surface in the
+ * review UI as failures even though CI is green — the exact "green
+ * CI, red visual" gap Qlip is meant to eliminate. Pruning here keeps
+ * the manifest truthful; capture-presence alone is NOT a safe pass
+ * signal because Qlip's `auto` capture fires when the DOM settles
+ * regardless of whether the play test later fails, so a genuinely
+ * failing story also has an auto capture — vitest's own final
+ * `task.result.state` is the authoritative signal.
+ *
+ * Also decrements `stats.failed` by the count pruned so the build's
+ * top-line counter matches reality.
+ */
+export const pruneStaleErrorEntries = (
+  state: QlipRuntimeState,
+  storyId: string,
+): QlipManifestEntry[] => {
+  if (!storyId) return [];
+  const kept: QlipManifestEntry[] = [];
+  const pruned: QlipManifestEntry[] = [];
+  for (const entry of state.manifest.entries) {
+    if (entry.kind === 'error' && entry.storyId === storyId) {
+      pruned.push(entry);
+      continue;
+    }
+    kept.push(entry);
+  }
+  if (pruned.length) {
+    state.manifest.entries = kept;
+    state.manifest.stats = {
+      ...state.manifest.stats,
+      failed: Math.max(0, state.manifest.stats.failed - pruned.length),
+    };
+  }
+  return pruned;
+};
+
 export const updateStats = (state: QlipRuntimeState, updates: Partial<QlipManifest['stats']>) => {
   state.manifest.stats = {
     ...state.manifest.stats,

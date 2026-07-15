@@ -27,6 +27,7 @@ import {
   initRuntimeState,
   markStorybookWarning,
   nextStepName,
+  pruneStaleErrorEntries,
   pushEntry,
   updateStats,
 } from './context.js';
@@ -53,6 +54,11 @@ type WriteFileCommand = (
   encoding: 'utf-8',
 ) => Promise<unknown>;
 
+// `removeFile` was added to vitest-browser's built-in `BrowserCommands`
+// (see `vitest/dist/browser.d.ts`). Older Vitest 2 releases don't ship
+// it; the retry-mask fix silently no-ops when the command is missing.
+type RemoveFileCommand = (path: string) => Promise<unknown>;
+
 const writeManifestFragment = async (
   commands: { writeFile: WriteFileCommand },
   buildDir: string,
@@ -64,6 +70,26 @@ const writeManifestFragment = async (
     JSON.stringify(manifest, null, 2),
     'utf-8',
   );
+};
+
+/**
+ * Best-effort file deletion for retry-mask pruning. Silent no-op when
+ * the underlying command is missing (older Vitest) or the file is
+ * already gone (another cleanup path beat us to it). We deliberately
+ * swallow errors — pruning is a UI-fidelity improvement, not a
+ * correctness gate; a leftover orphan PNG on disk is harmless because
+ * nothing in the manifest references it after the entry is pruned.
+ */
+const bestEffortRemoveFile = async (
+  commands: { removeFile?: RemoveFileCommand },
+  absolutePath: string,
+): Promise<void> => {
+  if (typeof commands.removeFile !== 'function') return;
+  try {
+    await commands.removeFile(absolutePath);
+  } catch {
+    // Swallow — see JSDoc.
+  }
 };
 
 const ensureBrowserContext = async () => {
@@ -864,6 +890,43 @@ export const captureAutoScreenshot = async (ctx: QlipTestContext) => {
       story.name = derived.name;
     }
   }
+
+  // Retry-mask fix: when vitest is configured with `retry > 0` and an
+  // earlier attempt for THIS story failed but the current attempt
+  // passed, drop the error captures those earlier attempts pushed to
+  // the manifest. Left alone they'd upload alongside the successful
+  // auto capture and surface as failures in the review UI even though
+  // CI is green — the "green CI, red visual" gap Qlip is meant to
+  // eliminate. Capture-presence alone is NOT a safe pass signal
+  // (auto captures fire when the DOM settles regardless of play-test
+  // outcome), so we key on vitest's authoritative `task.result`.
+  const currentResult = ctx.task.result;
+  const retryCount = currentResult?.retryCount ?? 0;
+  if (
+    story.id &&
+    currentResult?.state === 'pass' &&
+    retryCount > 0
+  ) {
+    const pruned = pruneStaleErrorEntries(runtime, story.id);
+    if (pruned.length) {
+      const { commands } = await ensureBrowserContext();
+      for (const entry of pruned) {
+        if (entry.path) {
+          await bestEffortRemoveFile(
+            commands,
+            joinPath(runtime.config.buildDir, entry.path),
+          );
+        }
+        if (entry.logsPath) {
+          await bestEffortRemoveFile(
+            commands,
+            joinPath(runtime.config.buildDir, entry.logsPath),
+          );
+        }
+      }
+    }
+  }
+
   await captureScreenshot({
     kind: 'auto',
     story,
