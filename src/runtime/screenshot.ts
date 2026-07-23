@@ -157,10 +157,19 @@ const resolveStoryInfo = (ctx: QlipStoryContext) => {
     rawName && !FUNCTION_NAME_TAGS.has(rawName)
       ? humanizeExportName(rawName)
       : rawName;
+  // Storybook's human-written story description, when present. Trim and
+  // drop empties so a blank/whitespace-only value never lands on the
+  // manifest entry.
+  const rawDescription = ctx.parameters?.docs?.description?.story;
+  const description =
+    typeof rawDescription === 'string' && rawDescription.trim().length > 0
+      ? rawDescription.trim()
+      : undefined;
   return {
     id: storyId,
     title: ctx.title,
     name: humanizedName,
+    description,
     // Filled by the auto/error capture entry points from the test
     // task's `meta.componentName` (addon-vitest); the composed story
     // context itself carries no component name.
@@ -471,6 +480,7 @@ const buildEntry = ({
   storyName,
   componentName,
   storyFilePath,
+  description,
   screenshotName,
   relativePath,
   viewport,
@@ -485,6 +495,7 @@ const buildEntry = ({
   storyName?: string;
   componentName?: string;
   storyFilePath?: string;
+  description?: string;
   screenshotName: string;
   relativePath: string;
   viewport: QlipViewport;
@@ -505,6 +516,7 @@ const buildEntry = ({
   timings: { ms: timingsMs },
   ...(componentName ? { componentName } : {}),
   ...(storyFilePath ? { storyFilePath } : {}),
+  ...(description ? { description } : {}),
   ...(logsPath ? { logsPath } : {}),
 });
 
@@ -585,6 +597,7 @@ const captureScreenshot = async ({
         storyName: story.name,
         componentName: story.componentName,
         storyFilePath: story.storyFilePath,
+        description: story.description,
         screenshotName: name,
         relativePath: usesNamedPath
           ? buildManualScreenshotPath({
@@ -707,6 +720,7 @@ const captureScreenshot = async ({
     storyName: story.name,
     componentName: story.componentName,
     storyFilePath: story.storyFilePath,
+    description: story.description,
     screenshotName: name,
     relativePath,
     viewport: resolved.viewport,

@@ -469,6 +469,91 @@ describe('screenshot capture', () => {
     expect(filePath).toContain('screenshot.test');
   });
 
+  // Cross-repo contract: every Storybook story now carries a human
+  // description at `parameters.docs.description.story`. qlip-server
+  // accepts an optional `description` on each manifest snapshot entry
+  // and persists it to `snapshots.description`. The plugin must read
+  // the story's description at capture time and forward it onto the
+  // manifest entry so the real data flows through.
+  it('captures parameters.docs.description.story onto the entry as description', async () => {
+    const { page } = await import('@vitest/browser/context');
+    page.screenshot.mockResolvedValue('ok');
+
+    await captureAutoScreenshot({
+      task: { meta: { storyId: 'button--primary' }, name: 'Primary' },
+      story: {
+        id: 'button--primary',
+        title: 'Components/Button',
+        name: 'Primary',
+        parameters: {
+          docs: {
+            description: {
+              story: 'The primary call-to-action button.',
+            },
+          },
+        },
+      },
+    } as never);
+
+    const entry = getRuntimeState()?.manifest.entries[0];
+    expect(entry?.description).toBe('The primary call-to-action button.');
+  });
+
+  it('forwards the description on the manual screenshot() path too', async () => {
+    const { page } = await import('@vitest/browser/context');
+    page.screenshot.mockResolvedValue('ok');
+
+    await screenshot({
+      id: 'button--primary',
+      title: 'Components/Button',
+      name: 'Primary',
+      parameters: {
+        docs: { description: { story: 'Manual capture description.' } },
+      },
+    });
+
+    const entry = getRuntimeState()?.manifest.entries[0];
+    expect(entry?.kind).toBe('manual');
+    expect(entry?.description).toBe('Manual capture description.');
+  });
+
+  it('trims the description and omits it when blank or absent', async () => {
+    const { page } = await import('@vitest/browser/context');
+    page.screenshot.mockResolvedValue('ok');
+
+    // Whitespace-only description → omitted entirely (no empty string).
+    await captureAutoScreenshot({
+      task: { meta: { storyId: 'button--blank' }, name: 'Blank' },
+      story: {
+        id: 'button--blank',
+        title: 'Components/Button',
+        name: 'Blank',
+        parameters: { docs: { description: { story: '   ' } } },
+      },
+    } as never);
+    // Padded description → trimmed.
+    await captureAutoScreenshot({
+      task: { meta: { storyId: 'button--padded' }, name: 'Padded' },
+      story: {
+        id: 'button--padded',
+        title: 'Components/Button',
+        name: 'Padded',
+        parameters: { docs: { description: { story: '  padded  ' } } },
+      },
+    } as never);
+    // No docs params at all → omitted.
+    await captureAutoScreenshot({
+      task: { meta: { storyId: 'button--none' }, name: 'None' },
+      story: { id: 'button--none', title: 'Components/Button', name: 'None' },
+    } as never);
+
+    const entries = getRuntimeState()?.manifest.entries ?? [];
+    const [blank, padded, none] = entries;
+    expect(blank).not.toHaveProperty('description');
+    expect(padded?.description).toBe('padded');
+    expect(none).not.toHaveProperty('description');
+  });
+
   it('leaves componentName undefined when task.meta omits it', async () => {
     const { page } = await import('@vitest/browser/context');
     page.screenshot.mockResolvedValue('ok');
