@@ -147,7 +147,18 @@ export interface QlipStoryContext {
    */
   name?: string;
   storyName?: string;
-  parameters?: { qlip?: QlipParameters };
+  parameters?: {
+    qlip?: QlipParameters;
+    /**
+     * Storybook's Autodocs / MDX story description. Authors write it
+     * via `parameters.docs.description.story` on a story. qlip reads it
+     * at capture time and forwards it verbatim onto the manifest entry's
+     * `description` field so the dashboard can show *why* a story looks
+     * the way it does next to its screenshot. Optional — most stories
+     * carry no description.
+     */
+    docs?: { description?: { story?: string } };
+  };
 }
 
 export type QlipConsoleLevel = 'error' | 'warn';
@@ -203,6 +214,14 @@ export interface QlipManifestEntry {
    * when neither source is available.
    */
   storyFilePath?: string;
+  /**
+   * Human-written story description, sourced from Storybook's
+   * `parameters.docs.description.story` at capture time. Lets the
+   * dashboard render the intent of a story alongside its screenshot.
+   * Trimmed at capture; omitted entirely when absent or empty. The
+   * server persists this into `snapshots.description`.
+   */
+  description?: string;
   screenshotName: string;
   path: string;
   viewport: QlipViewport;
