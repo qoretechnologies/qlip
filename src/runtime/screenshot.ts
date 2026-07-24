@@ -195,21 +195,42 @@ const resolveStoryInfo = (ctx: QlipStoryContext) => {
  * in the id alone to distinguish "deeper path" from "multi-word name".
  * Accept the minor cosmetic loss in exchange for usable groupings.
  */
-const deriveTitleNameFromStoryId = (
+export const deriveTitleNameFromStoryId = (
   storyId: string,
+  /**
+   * The real (CSF-meta) component name, when known. A storyId can't tell
+   * the title's `/` separators from a multi-word leaf's spaces, so the
+   * pure kebab derivation collapses "Automation Intelligence Panel" into
+   * "Automation/Intelligence/Panel". But we DO capture the component name
+   * intact — so if the title's trailing kebab segments spell it out, we
+   * splice the real name back in and recover the spaces the id lost.
+   */
+  componentName?: string,
 ): { title: string | undefined; name: string | undefined } => {
   if (!storyId || !storyId.includes('--')) {
     return { title: undefined, name: undefined };
   }
   const [titleKebab, nameKebab] = storyId.split('--', 2);
   const capitalize = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
-  const title = titleKebab
-    ? titleKebab
-        .split('-')
-        .filter((seg) => seg.length > 0)
-        .map(capitalize)
-        .join('/')
-    : undefined;
+  const kebabPathToTitle = (kebab: string) =>
+    kebab
+      .split('-')
+      .filter((seg) => seg.length > 0)
+      .map(capitalize)
+      .join('/');
+  let title = titleKebab ? kebabPathToTitle(titleKebab) : undefined;
+  // Recover a multi-word component-name leaf using the intact componentName.
+  if (title && titleKebab && componentName) {
+    const compKebab = componentName.trim().toLowerCase().replace(/\s+/g, '-');
+    if (compKebab && titleKebab.toLowerCase() === compKebab) {
+      // The whole title IS the component (no path prefix).
+      title = componentName;
+    } else if (compKebab && titleKebab.toLowerCase().endsWith(`-${compKebab}`)) {
+      const prefixKebab = titleKebab.slice(0, -(compKebab.length + 1));
+      const prefix = kebabPathToTitle(prefixKebab);
+      title = prefix ? `${prefix}/${componentName}` : componentName;
+    }
+  }
   const name = nameKebab
     ? nameKebab
         .split('-')
@@ -896,7 +917,7 @@ export const captureAutoScreenshot = async (ctx: QlipTestContext) => {
   // where `composeStory` hides the title and `__STORYBOOK_PREVIEW__`
   // isn't initialized — see PROGRESS.md 2026-05-25.
   if (story.id && (!story.title || isFunctionNameTag(story.name))) {
-    const derived = deriveTitleNameFromStoryId(story.id);
+    const derived = deriveTitleNameFromStoryId(story.id, story.componentName);
     if (!story.title && derived.title) {
       story.title = derived.title;
     }
@@ -994,7 +1015,7 @@ export const captureErrorScreenshot = async (ctx: QlipTestContext) => {
   // path; the error capture inherits all the same context-shape
   // limitations of addon-vitest.
   if (story.id && (!story.title || isFunctionNameTag(story.name))) {
-    const derived = deriveTitleNameFromStoryId(story.id);
+    const derived = deriveTitleNameFromStoryId(story.id, story.componentName);
     if (!story.title && derived.title) {
       story.title = derived.title;
     }
