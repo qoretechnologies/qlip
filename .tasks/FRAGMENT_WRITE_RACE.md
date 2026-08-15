@@ -1,6 +1,6 @@
 # Task: manifest fragment writes lose captures (issues #25 + #26)
 
-**Status:** fixed 2026-08-15 (phases 1-3; phase 4 deferred).
+**Status:** fixed 2026-08-15 (phases 1-4).
 **Branch:** `fix/manifest-fragment-race`.
 **Issues:** [#26](https://github.com/qoretechnologies/qlip/issues/26)
 (root cause), [#25](https://github.com/qoretechnologies/qlip/issues/25)
@@ -196,10 +196,10 @@ Tests (all must fail against current `develop`):
       (ctx <fragmentId> #<seq>)`.
 - [x] Tests for both.
 
-### Phase 4 — executed-vs-captured census (investigated 2026-08-15, not built)
+### Phase 4 — executed-vs-captured census ✓ (investigated + built 2026-08-15)
 
-**Verdict: build it, reporter-side. It is cheaper and sharper than the
-estimate that deferred it.** The doubt was whether Vitest's reporter
+**Verdict was: build it, reporter-side. It is cheaper and sharper than
+the estimate that deferred it.** The doubt was whether Vitest's reporter
 payload could tell story tests from ordinary ones, and whether it
 arrived before the merge. A throwaway probe reporter run against this
 repo's storybook project answered both:
@@ -230,16 +230,30 @@ build: `1713 story tests executed, 560 captured — 1153 missing`, plus
 the missing ids. That is the difference between one run and three
 builds plus a week of elimination.
 
-- [ ] `src/upload/census.ts` — symbol-keyed on `globalThis` (same
+- [x] `src/upload/census.ts` — symbol-keyed on `globalThis` (same
       pattern as `__QLIP_FINALIZE_CONFIG__`), so whichever path
       finalizes can read it; reporters and globalSetup share the Node
-      process.
-- [ ] `QlipUploadReporter` — `onTestModuleEnd` (V3+) and
+      process. Both task-tree walkers are duck-typed and swallow
+      unknown shapes — a throw inside a reporter hook would break a
+      run that is otherwise fine.
+- [x] `QlipUploadReporter` — `onTestModuleEnd` (V3+) and
       `onFinished(files)` (V2) accumulate `meta.storyId` per module.
-- [ ] `finalizeBuild` — diff census vs auto entries, warn with counts
-      + the missing ids grouped by story file, and fold both into
-      `capture-report.json`.
-- [ ] Tests against both lifecycle shapes.
+- [x] `capture-report.ts` — diffs census vs auto entries into
+      `storyTestsExecuted` / `missingStoryIds` / `missingByStoryFile`;
+      `finalizeBuild` warns.
+- [x] Tests against both lifecycle shapes, plus the three failure
+      modes below.
+
+**Verified in a live browser run.** Disabling auto capture on one story
+produced, from the real pipeline:
+
+```
+[qlip] 1 of 13 story tests produced no capture, across 1 story file
+(example-header--logged-in). Expected if those stories set
+qlip.auto = false; otherwise they were lost.
+```
+
+Without the gap: `storyTestsExecuted: 13`, 13 auto entries, 0 missing.
 
 Design constraints found while investigating — get these wrong and the
 check is worse than nothing:

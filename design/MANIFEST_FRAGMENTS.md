@@ -130,6 +130,28 @@ The check compares two facts on disk rather than trusting either
 producer, so it holds for the Vitest plugin, the test-runner and
 standalone `qlip-upload` alike.
 
+One loss leaves nothing on disk to compare: a story that runs and
+captures nothing at all — no entry, no PNG. Only the test runner
+witnesses that, so `QlipUploadReporter` records the story ids Vitest
+executed (`src/upload/census.ts`, from `meta.storyId`, per module as
+each file finishes) and the audit names the stories that never
+captured. Three rules keep it honest:
+
+- **No census means UNKNOWN, never "everything is missing."** On
+  Vitest 2 in workspace mode the reporter can be lifecycle-dead — the
+  reason `globalSetup` teardown exists — and the census is simply
+  absent. The audit then says nothing.
+- **Only `auto` entries count as proof of capture.** A story test
+  yields exactly one; counting manual or error entries would let an
+  extra capture mask a missing one.
+- **It warns, never fails.** `parameters.qlip.auto = false` on a
+  single story is invisible from the runner's side, so this names
+  names and leaves the judgement to a human.
+
+The census covers the Vitest path only. The test-runner path drives
+stories from a Storybook index it walks itself, so a story missing
+there is a missing visit, not a missing capture.
+
 `diagnostics: true` on the plugin (or `$QLIP_DEBUG=1`) additionally
 logs one line per capture with the story, path, context and sequence.
 

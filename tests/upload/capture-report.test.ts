@@ -16,9 +16,11 @@ import {
   CAPTURE_REPORT_FILE,
   buildCaptureReport,
   describeCollisions,
+  describeMissingCaptures,
   describePartialBuild,
   writeCaptureReport,
 } from '../../src/upload/capture-report.js';
+import type { IQlipStoryCensus } from '../../src/upload/census.js';
 import type {
   ISnapshotIdCollision,
   MergeResult,
@@ -231,6 +233,85 @@ describe('buildCaptureReport', () => {
     const message = describeCollisions(report);
     expect(message).toContain('clash--story');
     expect(message).toContain('stories/manual/clash--story--auto.png');
+  });
+
+  it('names stories that ran and captured nothing', async () => {
+    // The only loss no other signal can see: no entry, no PNG, so the
+    // orphan check has nothing to compare and the manifest simply
+    // looks shorter.
+    const census: IQlipStoryCensus = {
+      byModule: {
+        '/src/Button.stories.ts': ['button--primary', 'button--ghost'],
+        '/src/Page.stories.tsx': ['page--home'],
+      },
+    };
+
+    const report = await buildCaptureReport(
+      buildDir,
+      mergeResult([entry('button--primary'), entry('page--home')]),
+      census,
+    );
+
+    expect(report.storyTestsExecuted).toBe(3);
+    expect(report.missingStoryIds).toEqual(['button--ghost']);
+    expect(report.missingByStoryFile).toEqual({
+      '/src/Button.stories.ts': ['button--ghost'],
+    });
+    const message = describeMissingCaptures(report);
+    expect(message).toContain('1 of 3 story tests produced no capture');
+    expect(message).toContain('button--ghost');
+  });
+
+  it('does not let a manual capture stand in for a missing auto capture', async () => {
+    // A story test yields exactly one auto entry; counting manual or
+    // error entries as proof of capture would hide the gap.
+    const census: IQlipStoryCensus = {
+      byModule: { '/src/Page.stories.tsx': ['page--flow'] },
+    };
+
+    const report = await buildCaptureReport(
+      buildDir,
+      mergeResult([
+        entry('page--flow', {
+          kind: 'manual',
+          screenshotName: 'step-1',
+          path: 'stories/manual/page--flow--step-1.png',
+        }),
+      ]),
+      census,
+    );
+
+    expect(report.missingStoryIds).toEqual(['page--flow']);
+  });
+
+  it('counts a skipped story as captured — it was recorded, not lost', async () => {
+    const census: IQlipStoryCensus = {
+      byModule: { '/src/Page.stories.tsx': ['page--skipped'] },
+    };
+
+    const report = await buildCaptureReport(
+      buildDir,
+      mergeResult([entry('page--skipped', { status: 'skipped' })]),
+      census,
+    );
+
+    expect(report.missingStoryIds).toEqual([]);
+    expect(describeMissingCaptures(report)).toBeNull();
+  });
+
+  it('reports UNKNOWN rather than total loss when no census was collected', async () => {
+    // On Vitest 2 in workspace mode the reporter can be lifecycle-dead
+    // and the globalSetup teardown finalizes instead. Reading that as
+    // "every story is missing" would make the warning worthless.
+    const report = await buildCaptureReport(
+      buildDir,
+      mergeResult([entry('a--one')]),
+      undefined,
+    );
+
+    expect(report.storyTestsExecuted).toBeNull();
+    expect(report.missingStoryIds).toEqual([]);
+    expect(describeMissingCaptures(report)).toBeNull();
   });
 
   it('writes the report next to the manifest', async () => {

@@ -22,6 +22,8 @@
 import { readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { QlipManifest } from '../types.js';
+import { censusStoryIds, readStoryCensus } from './census.js';
+import type { IQlipStoryCensus } from './census.js';
 import type { ISnapshotIdCollision, MergeResult } from './manifest.js';
 
 export const CAPTURE_REPORT_FILE = 'capture-report.json';
@@ -60,6 +62,19 @@ export interface IQlipCaptureReport {
    * of the two `screenshot()` calls.
    */
   collisions: ISnapshotIdCollision[];
+  /**
+   * Story tests Vitest reported running, or `null` when no census was
+   * collected. `null` means UNKNOWN, never zero — see
+   * `src/upload/census.ts`.
+   */
+  storyTestsExecuted: number | null;
+  /**
+   * Stories that ran and produced no capture of any kind. Only the
+   * test runner can see these: they leave no entry and no PNG.
+   */
+  missingStoryIds: string[];
+  /** `missingStoryIds` grouped by the story file that ran them. */
+  missingByStoryFile: Record<string, string[]>;
 }
 
 /** Recursively collect `stories/**\/*.png`, build-dir-relative, posix. */
@@ -96,9 +111,49 @@ const countBy = <T extends string>(values: T[]): Record<string, number> => {
   return counts;
 };
 
+/**
+ * Diff the census against the captures. Only `auto` entries count: a
+ * story test produces exactly one auto entry (captured, skipped or
+ * failed), while manual and error entries are extras that would
+ * otherwise mask a gap.
+ */
+const diffCensus = (
+  manifest: QlipManifest,
+  census: IQlipStoryCensus | undefined,
+): Pick<
+  IQlipCaptureReport,
+  'storyTestsExecuted' | 'missingStoryIds' | 'missingByStoryFile'
+> => {
+  if (!census) {
+    return {
+      storyTestsExecuted: null,
+      missingStoryIds: [],
+      missingByStoryFile: {},
+    };
+  }
+  const executed = censusStoryIds(census);
+  const captured = new Set(
+    manifest.entries.filter((e) => e.kind === 'auto').map((e) => e.storyId),
+  );
+  const missingByStoryFile: Record<string, string[]> = {};
+  const missingStoryIds: string[] = [];
+  for (const [moduleId, storyIds] of Object.entries(census.byModule)) {
+    const missing = storyIds.filter((id) => !captured.has(id)).sort();
+    if (missing.length === 0) continue;
+    missingByStoryFile[moduleId] = missing;
+    missingStoryIds.push(...missing);
+  }
+  return {
+    storyTestsExecuted: executed.size,
+    missingStoryIds: missingStoryIds.sort(),
+    missingByStoryFile,
+  };
+};
+
 export const buildCaptureReport = async (
   buildDir: string,
   merged: MergeResult,
+  census: IQlipStoryCensus | undefined = readStoryCensus(),
 ): Promise<IQlipCaptureReport> => {
   const manifest: QlipManifest = merged.manifest;
   const referenced = new Set(manifest.entries.map((entry) => entry.path));
@@ -132,6 +187,7 @@ export const buildCaptureReport = async (
       .sort(),
     retractedScreenshots: onDisk.filter((file) => retracted.has(file)).sort(),
     collisions: merged.collisions,
+    ...diffCensus(manifest, census),
   };
 };
 
@@ -144,6 +200,31 @@ export const writeCaptureReport = async (
     JSON.stringify(report, null, 2),
     'utf-8',
   );
+};
+
+/**
+ * One-line human summary of stories that ran without capturing, or
+ * `null` when there are none — or when no census was collected, which
+ * is not the same thing and must never read as total loss.
+ *
+ * Advisory by design: a story can legitimately disable its own auto
+ * capture with `parameters.qlip.auto = false`, and that override is
+ * invisible from the runner's side, so this names names and leaves the
+ * judgement to a human.
+ */
+export const describeMissingCaptures = (
+  report: IQlipCaptureReport,
+  exampleCount = 5,
+): string | null => {
+  const { missingStoryIds, storyTestsExecuted } = report;
+  if (storyTestsExecuted === null || missingStoryIds.length === 0) return null;
+  const examples = missingStoryIds.slice(0, exampleCount).join(', ');
+  const more =
+    missingStoryIds.length > exampleCount
+      ? `, +${String(missingStoryIds.length - exampleCount)} more`
+      : '';
+  const files = Object.keys(report.missingByStoryFile).length;
+  return `${String(missingStoryIds.length)} of ${String(storyTestsExecuted)} story tests produced no capture, across ${String(files)} story file${files === 1 ? '' : 's'} (${examples}${more}). Expected if those stories set qlip.auto = false; otherwise they were lost. See ${CAPTURE_REPORT_FILE} in the build dir.`;
 };
 
 /**

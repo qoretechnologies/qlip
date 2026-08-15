@@ -13,6 +13,11 @@
  *    qlip-server. On failure either throw (when
  *    `upload.failOnUploadError` is set) or log to stderr.
  *
+ * 3. **Always:** record which stories Vitest actually ran, so the
+ *    build can report the ones that produced no capture at all. See
+ *    `src/upload/census.ts` — a story that never captures leaves
+ *    nothing on disk to notice.
+ *
  * Wired up by `qlipVitestPlugin` unconditionally so non-upload users
  * still get the merge.
  *
@@ -37,6 +42,10 @@
  */
 
 import type { QlipRuntimeConfig, QlipUploadOptions } from '../types.js';
+import {
+  recordStoryTestsFromFiles,
+  recordStoryTestsFromModule,
+} from './census.js';
 import { finalizeBuild } from './finalize.js';
 
 export interface IQlipUploadReporterOptions {
@@ -58,6 +67,17 @@ export class QlipUploadReporter {
   }
 
   /**
+   * Vitest 3+ per-module hook. Records the module's story tests as it
+   * finishes, rather than reading the whole tree at end-of-run: the
+   * globalSetup teardown can finalize the build before any end-of-run
+   * reporter hook fires, and a census that arrives after the merge is
+   * a census nobody reads.
+   */
+  onTestModuleEnd(testModule: unknown): void {
+    recordStoryTestsFromModule(testModule);
+  }
+
+  /**
    * Vitest 3+ end-of-run hook. Delegates to the shared
    * `finalizeBuild()` so both lifecycle names share one code path.
    * `finalizeBuild` is process-globally idempotent.
@@ -70,13 +90,18 @@ export class QlipUploadReporter {
    * Vitest 2 end-of-run hook (renamed to `onTestRunEnd` in V3).
    * Same shared implementation as `onTestRunEnd` above.
    *
-   * Variadic-by-omission: V2 passes `(files, errors, coverage?)`,
-   * but the merge reads from disk and never touches in-memory test
-   * state, so we accept the call and ignore the args. JavaScript
-   * silently drops extra positional arguments — no signature
-   * tightness needed at the call site.
+   * V2 has no per-module reporter hook carrying the task tree, so the
+   * census is taken here from `files` — before finalizing, so it is
+   * in place if this call is the one that merges. If the globalSetup
+   * teardown already finalized, there is no census for that build and
+   * the audit stays silent rather than claiming everything is
+   * missing.
+   *
+   * The merge itself reads from disk and never touches in-memory test
+   * state, so the remaining args (`errors`, `coverage`) are ignored.
    */
-  async onFinished(): Promise<void> {
+  async onFinished(files?: unknown): Promise<void> {
+    recordStoryTestsFromFiles(files);
     await this.invokeFinalize();
   }
 

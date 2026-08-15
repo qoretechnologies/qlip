@@ -29,6 +29,7 @@ import {
 import {
   buildCaptureReport,
   describeCollisions,
+  describeMissingCaptures,
   describePartialBuild,
   writeCaptureReport,
 } from './capture-report.js';
@@ -113,6 +114,16 @@ export const finalizeBuild = async (
   if (collisions) {
     // eslint-disable-next-line no-console
     console.warn(`[qlip] ${collisions}`);
+  }
+  // Suppressed when auto capture is off by default: every story would
+  // then be "missing" by design. Per-story overrides stay invisible
+  // from here, which is why this warns and never fails a build.
+  if (opts.runtime.defaults?.auto !== false) {
+    const missing = describeMissingCaptures(report);
+    if (missing) {
+      // eslint-disable-next-line no-console
+      console.warn(`[qlip] ${missing}`);
+    }
   }
 
   // A partial build still uploads: seeing which stories DID capture is

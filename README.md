@@ -229,6 +229,8 @@ qlipVitestPlugin({
 
 `ignoreElements` lets you provide CSS selectors to mask before capture. Qlip draws solid overlays on matching elements so layout stays intact while visual diffs ignore those regions.
 
+qlip also reports what it *failed* to capture: the run warns when Storybook stories executed without producing a capture, naming them and the files they came from. It is advisory — a story that sets `parameters.qlip.auto = false` shows up there too.
+
 `diagnostics` (or `QLIP_DEBUG=1`) logs one line per capture — story, kind, path, and which browser context wrote it. Turn it on when a CI build captured fewer stories than it ran; the always-written `capture-report.json` covers the same ground after the fact.
 
 ## Memory-safe config for large Storybooks
