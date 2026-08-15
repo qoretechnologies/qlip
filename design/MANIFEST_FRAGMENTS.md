@@ -158,20 +158,20 @@ logs one line per capture with the story, path, context and sequence.
 ### Two identities that disagree, and what qlip can do about it
 
 qlip-server keys a **snapshot** on `(buildId, storyId, screenshotName)`
-but a **baseline** on `(projectId, storyId, viewportKey)` — no
-screenshot name. So a story's auto capture and its `screenshot()`
-captures at one viewport are separate snapshot rows that resolve to a
-single baseline image: accepting one sets the baseline for all of them,
-and the rest diff against a picture of something else. `error` captures
-are exempt — the server skips baseline lookup for them.
+but a **baseline** on `(projectId, storyId, kind, viewportKey, branch)`
+— no screenshot name. `kind` keeps a story's auto capture separate from
+its `screenshot()` captures, so those do not collide; two captures of
+the same kind do. Accepting one sets the baseline for the other, which
+then diffs against a picture of a different moment. `error` captures are
+exempt — the server skips baseline lookup for them.
 
 Both keys are now written down in
 [`UPLOAD.md`](UPLOAD.md#snapshot-and-baseline-identity-both-sides-must-agree),
 which is the contract both repos cite — the silence there is how they
 came to disagree. The index itself is server-side, so the client cannot
 fix it. What it can do is refuse to be silent: the audit groups captured non-error entries by
-`(storyId, viewportKey)` and reports any group larger than one, once
-per build. Until qlip-server keys baselines by screenshot name too,
+`(storyId, kind, viewportKey)` and reports any group larger than one,
+once per build. Until qlip-server keys baselines by screenshot name too,
 those diffs mean nothing and should not be read as visual change.
 
 Note the two collision reports are different things and both exist:

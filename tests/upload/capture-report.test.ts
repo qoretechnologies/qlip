@@ -315,11 +315,11 @@ describe('buildCaptureReport', () => {
     expect(describeMissingCaptures(report)).toBeNull();
   });
 
-  it('reports captures that will share a baseline on the server', async () => {
+  it('reports same-kind captures that will share a baseline on the server', async () => {
     // qlip-server keys snapshots by (story, screenshotName) but
-    // baselines by (story, viewport) — so a story's auto capture and
-    // its screenshot() captures are separate rows sharing one baseline
-    // image. Accepting one sets the baseline for all of them.
+    // baselines by (story, kind, viewport, branch) — the screenshot
+    // name is missing there, so two screenshot() captures of one story
+    // are separate rows sharing one baseline image.
     const report = await buildCaptureReport(
       buildDir,
       mergeResult([
@@ -338,16 +338,39 @@ describe('buildCaptureReport', () => {
       ]),
     );
 
+    // The auto capture is NOT in the group: `kind` is part of the
+    // server's baseline key, so it has a baseline of its own.
     expect(report.baselineCollisions).toEqual([
       {
         storyId: 'page--flow',
+        kind: 'manual',
         viewportKey: '1280x720',
-        screenshotNames: ['auto', 'step-1', 'step-2'],
+        screenshotNames: ['step-1', 'step-2'],
       },
     ]);
     const message = describeBaselineCollisions(report);
-    expect(message).toContain('3 captures across 1 story');
-    expect(message).toContain('page--flow @1280x720');
+    expect(message).toContain('2 captures across 1 story');
+    expect(message).toContain('page--flow manual@1280x720');
+  });
+
+  it('does not flag a story that has one auto and one manual capture', async () => {
+    // The common shape for anyone using screenshot(). The server keys
+    // baselines by kind, so these two do not compete — flagging them
+    // would fire on nearly every consumer that takes a manual capture.
+    const report = await buildCaptureReport(
+      buildDir,
+      mergeResult([
+        entry('page--flow'),
+        entry('page--flow', {
+          kind: 'manual',
+          screenshotName: 'after-login',
+          path: 'stories/manual/page--flow--after-login.png',
+        }),
+      ]),
+    );
+
+    expect(report.baselineCollisions).toEqual([]);
+    expect(describeBaselineCollisions(report)).toBeNull();
   });
 
   it('does not count captures at different viewports as sharing a baseline', async () => {
@@ -356,7 +379,11 @@ describe('buildCaptureReport', () => {
     const report = await buildCaptureReport(
       buildDir,
       mergeResult([
-        entry('page--flow'),
+        entry('page--flow', {
+          kind: 'manual',
+          screenshotName: 'desktop',
+          path: 'stories/manual/page--flow--desktop.png',
+        }),
         entry('page--flow', {
           kind: 'manual',
           screenshotName: 'mobile',
@@ -372,15 +399,19 @@ describe('buildCaptureReport', () => {
 
   it('ignores error captures, which the server never diffs', async () => {
     // Error snapshots skip baseline lookup entirely (design/UPLOAD.md),
-    // so they never compete for one.
+    // so even two of them for one story never compete for a baseline.
     const report = await buildCaptureReport(
       buildDir,
       mergeResult([
-        entry('flaky--story'),
         entry('flaky--story', {
           kind: 'error',
           screenshotName: 'qlip-auto-error-capture',
           path: 'stories/error/flaky--story--qlip-auto-error-capture.png',
+        }),
+        entry('flaky--story', {
+          kind: 'error',
+          screenshotName: 'qlip-auto-error-capture-2',
+          path: 'stories/error/flaky--story--qlip-auto-error-capture-2.png',
         }),
       ]),
     );
@@ -393,11 +424,15 @@ describe('buildCaptureReport', () => {
     const report = await buildCaptureReport(
       buildDir,
       mergeResult([
-        entry('page--flow'),
         entry('page--flow', {
           kind: 'manual',
           screenshotName: 'step-1',
           path: 'stories/manual/page--flow--step-1.png',
+        }),
+        entry('page--flow', {
+          kind: 'manual',
+          screenshotName: 'step-2',
+          path: 'stories/manual/page--flow--step-2.png',
           status: 'skipped',
         }),
       ]),

@@ -21,7 +21,7 @@
 
 import { readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { QlipManifest } from '../types.js';
+import type { QlipEntryKind, QlipManifest } from '../types.js';
 import { censusStoryIds, readStoryCensus } from './census.js';
 import type { IQlipStoryCensus } from './census.js';
 import type { ISnapshotIdCollision, MergeResult } from './manifest.js';
@@ -30,13 +30,16 @@ export const CAPTURE_REPORT_FILE = 'capture-report.json';
 
 /**
  * Two captures of one story that qlip-server resolves to the SAME
- * baseline, because it keys baselines on `(projectId, storyId,
- * viewportKey)` — no screenshot name — while keying snapshots on
- * `(buildId, storyId, screenshotName)`. The two identities disagree,
- * so a story's auto capture and its `screenshot()` captures at the
- * same viewport are separate snapshots that share one baseline image:
- * accepting one sets the baseline for all of them, and the others
- * diff against a picture of something else.
+ * baseline, because it keys baselines on `(projectId, storyId, kind,
+ * viewportKey, branch)` while keying snapshots on `(buildId, storyId,
+ * screenshotName)`. The screenshot name is missing from the baseline
+ * key, so two `screenshot()` captures of one story at one viewport —
+ * both `kind: interaction` — are separate snapshots sharing one
+ * baseline image: accepting one sets the baseline for the other, which
+ * then diffs against a picture of a different moment.
+ *
+ * `kind` IS in the baseline key, so a story's auto capture and its
+ * `screenshot()` captures do not collide — only same-kind captures do.
  *
  * Distinct from `ISnapshotIdCollision`, which is two captures the
  * server stores as one ROW. This is two rows sharing one BASELINE.
@@ -47,7 +50,9 @@ export const CAPTURE_REPORT_FILE = 'capture-report.json';
  */
 export interface IBaselineCollision {
   storyId: string;
-  /** `<width>x<height>`, the server's baseline discriminator. */
+  /** The capture kind these share — part of the server's baseline key. */
+  kind: QlipEntryKind;
+  /** `<width>x<height>`, also part of the server's baseline key. */
   viewportKey: string;
   /** Screenshot names competing for that baseline, in capture order. */
   screenshotNames: string[];
@@ -143,9 +148,13 @@ const countBy = <T extends string>(values: T[]): Record<string, number> => {
 };
 
 /**
- * Group captured entries by the identity qlip-server gives a BASELINE:
- * `(storyId, viewportKey)`. Any group with more than one member will
- * share a single baseline image on the server.
+ * Group captured entries by the part of the server's BASELINE identity
+ * a single build can vary: `(storyId, kind, viewportKey)`. The server
+ * also keys on branch, which is fixed for one build. Any group with
+ * more than one member shares a single baseline image there.
+ *
+ * In practice this only ever flags multiple `screenshot()` captures of
+ * one story at one viewport — an auto capture is alone in its kind.
  *
  * `error` captures are excluded: the server skips baseline lookup and
  * diffing for them entirely (see `design/UPLOAD.md`), so they never
@@ -158,13 +167,14 @@ const findBaselineCollisions = (
   for (const entry of manifest.entries) {
     if (entry.status !== 'captured' || entry.kind === 'error') continue;
     const viewportKey = `${String(entry.viewport.width)}x${String(entry.viewport.height)}`;
-    const key = `${entry.storyId}::${viewportKey}`;
+    const key = `${entry.storyId}::${entry.kind}::${viewportKey}`;
     const group = groups.get(key);
     if (group) {
       group.screenshotNames.push(entry.screenshotName);
     } else {
       groups.set(key, {
         storyId: entry.storyId,
+        kind: entry.kind,
         viewportKey,
         screenshotNames: [entry.screenshotName],
       });
@@ -283,13 +293,13 @@ export const describeBaselineCollisions = (
   const captures = groups.reduce((n, g) => n + g.screenshotNames.length, 0);
   const examples = groups
     .slice(0, exampleCount)
-    .map((g) => `${g.storyId} @${g.viewportKey} (${g.screenshotNames.join(', ')})`)
+    .map((g) => `${g.storyId} ${g.kind}@${g.viewportKey} (${g.screenshotNames.join(', ')})`)
     .join('; ');
   const more =
     groups.length > exampleCount
       ? `; +${String(groups.length - exampleCount)} more`
       : '';
-  return `${String(captures)} captures across ${String(groups.length)} stor${groups.length === 1 ? 'y' : 'ies'} will share a baseline on the server, which keys baselines by (story, viewport) and not by screenshot name — their diffs are not meaningful until that is fixed server-side. Affected: ${examples}${more}.`;
+  return `${String(captures)} captures across ${String(groups.length)} stor${groups.length === 1 ? 'y' : 'ies'} will share a baseline on the server, which keys baselines by (story, kind, viewport) and not by screenshot name — their diffs are not meaningful until that is fixed server-side. Affected: ${examples}${more}.`;
 };
 
 /**

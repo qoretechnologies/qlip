@@ -175,52 +175,58 @@ which is how they came to disagree.
 | identity | key | owner |
 |---|---|---|
 | **snapshot** (one row per capture in a build) | `(buildId, storyId, screenshotName)` | server, from the manifest entry |
-| **baseline** (the accepted image a capture diffs against) | `(projectId, storyId, screenshotName, viewportKey)` | server |
+| **baseline** (the accepted image a capture diffs against) | `(projectId, storyId, kind, screenshotName, viewportKey, branch)` | server |
 
 `viewportKey` is `<width>x<height>` from the entry's `viewport`.
 `screenshotName` is `auto` for an auto capture and the caller's name
 (or `step-N`) for a `screenshot()` capture.
 
-**The screenshot name belongs in BOTH keys.** A story that takes an
-auto capture and one or more `screenshot()` captures produces several
-snapshots that are, by construction, pictures of *different moments* —
-that is the whole point of a manual capture. They must not resolve to a
-shared baseline.
+**The screenshot name belongs in BOTH keys.** Two `screenshot()` calls
+in one play function are, by construction, pictures of *different
+moments* — that is the whole point of a manual capture. They must not
+resolve to a shared baseline.
 
-### Current server behaviour is non-conforming
+### The gap in the current server
 
 As of 2026-08-15 qlip-server keys baselines on
-`(projectId, storyId, viewportKey)` — no screenshot name — via
-`baselines_unique_idx`, and stores the image as
-`<project>/<storyId>__<viewportKey>.png`. So every non-error capture of
-a story at one viewport shares a single baseline: accepting one sets
-the baseline for all of them, and the others diff against a picture of
-a different moment. `error` captures are unaffected (they skip baseline
-lookup entirely — see the kinds table above).
+`(projectId, storyId, kind, viewportKey, branch)` via
+`baselines_unique_idx` (`src/db/schema.ts`, `src/services/baseline.service.ts`),
+and stores the image under `<project>/`. `kind` is there, so a story's
+auto capture and its `screenshot()` captures already hold separate
+baselines — those do NOT collide.
+
+What is missing is `screenshotName`. Two captures of one story at one
+viewport with the same kind — `screenshot(ctx, 'step-1')` and
+`screenshot(ctx, 'step-2')`, both `kind: interaction` — are separate
+snapshots that share one baseline: accepting one sets the baseline for
+the other, which then diffs against a picture of a different moment.
+`error` captures are unaffected (they skip baseline lookup entirely —
+see the kinds table above).
 
 Required server change, in `qlip-server`:
 
-1. add `screenshotName` to the baselines table and to
-   `baselines_unique_idx` — `(projectId, storyId, screenshotName, viewportKey)`;
-2. include it in the baseline filename —
-   `<project>/<storyId>__<screenshotName>__<viewportKey>.png` — applying
-   the same sanitization qlip uses for path segments
-   (`[^a-zA-Z0-9_.-] → _`, see `src/fs/output.ts`);
-3. migrate existing rows as `screenshotName = 'auto'`. Existing
-   baselines were written by whichever capture happened to be accepted,
-   and for the overwhelming majority of stories that is the auto
-   capture. Captures that are not `auto` then have no baseline and
-   surface once as NEW, for a human to accept — the correct outcome,
-   since they never had a baseline of their own to begin with.
+1. add `screenshotName` to the `baselines` table and to
+   `baselines_unique_idx`, and thread it through `IBaselineLookup` /
+   `getBaseline` / `updateBaseline` and their call sites in the upload
+   and review services;
+2. include it in the baseline filename, applying the same sanitization
+   qlip uses for path segments (`[^a-zA-Z0-9_.-] → _`, see
+   `src/fs/output.ts`);
+3. migrate existing rows to the screenshot name their source snapshot
+   carried. `snapshots.id` is `<buildId>-<storyId>-<screenshotName>`
+   and `baselines.sourceSnapshotId` points at it, so the name is
+   recoverable for rows with provenance; rows without it take `auto`,
+   which is what a `kind: snapshot` baseline always is.
 
 ### What the client does until then
 
 qlip cannot fix this from its side: it supplies `storyId`,
-`screenshotName` and `viewport` in the manifest and the server derives
-both identities. So the client reports it instead. After the merge, the
-audit groups captured non-error entries by `(storyId, viewportKey)` and
-warns once per build when any group holds more than one capture, naming
-the affected stories (`baselineCollisions` in `capture-report.json`;
+`screenshotName`, `kind` and `viewport` in the manifest and the server
+derives both identities. So the client reports it instead. After the
+merge, the audit groups captured non-error entries by
+`(storyId, kind, viewportKey)` — the part of the baseline key a single
+build can vary — and warns once per build when any group holds more
+than one capture, naming the affected stories (`baselineCollisions` in `capture-report.json`;
 see `MANIFEST_FRAGMENTS.md`). Those diffs are not meaningful until the
 server change lands, and should not be read as visual change.
 
