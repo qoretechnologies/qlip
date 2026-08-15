@@ -216,13 +216,12 @@ describe('mergeManifestFragments', () => {
   });
 
   // 2026-05-25 — vite dep-optimization re-runs sometimes execute the
-  // same .stories.tsx file twice in one build, producing two
-  // (storyId, kind) entries pointing at the same PNG. The server's
-  // snapshots table has a unique constraint on (buildId, storyId,
-  // kind) and rejects the upload with HTTP 500 if duplicates land in
-  // the manifest. The merger MUST dedupe — keeping the LATER entry
-  // because that's the post-reopt capture.
-  it('dedupes entries with identical (storyId, kind) keeping the LAST seen', async () => {
+  // same .stories.tsx file twice in one build, producing two entries
+  // pointing at the same PNG. qlip-server keys a snapshot on
+  // `${buildId}-${storyId}-${screenshotName}` and rejects the upload
+  // if duplicates land in the manifest. The merger MUST dedupe —
+  // keeping the LATER entry because that's the post-reopt capture.
+  it('dedupes entries with identical (storyId, screenshotName) keeping the LAST seen', async () => {
     const oldEntry = entry('components-guide--default', {
       timings: { ms: 100 },
       storyName: 'Default',
@@ -251,7 +250,7 @@ describe('mergeManifestFragments', () => {
   it('dedupes entries inside a single fragment too (defense in depth)', async () => {
     // A buggy runtime could conceivably write the same entry twice in
     // one fragment. The merger should still produce one row per
-    // (storyId, kind).
+    // snapshot id.
     await writeFragment(
       'single',
       fragment('2026-05-22T10:00:00.000Z', [
@@ -266,10 +265,11 @@ describe('mergeManifestFragments', () => {
   });
 
   it('keeps auto and error entries for the same storyId as separate rows', async () => {
-    // (storyId, kind) is the dedupe key. A story that produced both
-    // an auto capture and an error capture must yield TWO rows so
-    // the FailureCollection surface can show the error alongside
-    // the regular grid entry.
+    // Their screenshot names differ ('auto' vs the error base), so
+    // they are two distinct snapshots server-side. A story that
+    // produced both an auto capture and an error capture must yield
+    // TWO rows so the FailureCollection surface can show the error
+    // alongside the regular grid entry.
     await writeFragment(
       'frag',
       fragment('2026-05-22T10:00:00.000Z', [
@@ -283,6 +283,108 @@ describe('mergeManifestFragments', () => {
     expect(result.manifest.entries.map((e) => e.kind).sort()).toEqual([
       'auto',
       'error',
+    ]);
+  });
+
+  it('keeps every manual screenshot of a story — they are separate snapshots', async () => {
+    // The dedupe key used to be (storyId, kind), which silently kept
+    // only the LAST manual capture of a story: a play function taking
+    // three screenshots uploaded one. qlip-server keys on the
+    // screenshot name, so all three are real, distinct snapshots.
+    await writeFragment(
+      'frag',
+      fragment('2026-08-15T10:00:00.000Z', [
+        entry('page--flow', { kind: 'auto' }),
+        entry('page--flow', {
+          kind: 'manual',
+          screenshotName: 'step-1',
+          path: 'stories/manual/page--flow--step-1.png',
+        }),
+        entry('page--flow', {
+          kind: 'manual',
+          screenshotName: 'step-2',
+          path: 'stories/manual/page--flow--step-2.png',
+        }),
+        entry('page--flow', {
+          kind: 'manual',
+          screenshotName: 'step-3',
+          path: 'stories/manual/page--flow--step-3.png',
+        }),
+      ]),
+    );
+
+    const result = await mergeManifestFragments(buildDir);
+    if (!result) throw new Error('expected merge result');
+    expect(result.manifest.entries.map((e) => e.screenshotName)).toEqual([
+      'auto',
+      'step-1',
+      'step-2',
+      'step-3',
+    ]);
+    expect(result.manifest.stats.capturedManual).toBe(3);
+    expect(result.collisions).toEqual([]);
+  });
+
+  it('keeps every error capture of a retried story', async () => {
+    // Three failed attempts produce three error captures with
+    // distinct names (pickUniqueErrorName). Under the old key they
+    // collapsed to one, so the Failures surface showed a single
+    // attempt.
+    await writeFragment(
+      'frag',
+      fragment('2026-08-15T10:00:00.000Z', [
+        entry('flaky--story', {
+          kind: 'error',
+          screenshotName: 'qlip-auto-error-capture',
+          path: 'stories/error/flaky--story--qlip-auto-error-capture.png',
+        }),
+        entry('flaky--story', {
+          kind: 'error',
+          screenshotName: 'qlip-auto-error-capture-2',
+          path: 'stories/error/flaky--story--qlip-auto-error-capture-2.png',
+        }),
+      ]),
+    );
+
+    const result = await mergeManifestFragments(buildDir);
+    if (!result) throw new Error('expected merge result');
+    expect(result.manifest.entries).toHaveLength(2);
+    expect(result.manifest.stats.failed).toBe(2);
+  });
+
+  it('collapses two captures that would claim one snapshot id, and reports it', async () => {
+    // `screenshot(ctx, 'auto')` collides with the story's own auto
+    // capture: same storyId, same screenshot name, different image.
+    // The old key kept both because the kinds differed — and the
+    // server then rejected the ENTIRE build on its primary key.
+    await writeFragment(
+      'frag',
+      fragment('2026-08-15T10:00:00.000Z', [
+        entry('clash--story', { kind: 'auto' }),
+        entry('clash--story', {
+          kind: 'manual',
+          screenshotName: 'auto',
+          path: 'stories/manual/clash--story--auto.png',
+        }),
+      ]),
+    );
+
+    const result = await mergeManifestFragments(buildDir);
+    if (!result) throw new Error('expected merge result');
+    expect(result.manifest.entries).toHaveLength(1);
+    // Last wins, as everywhere else in the merge.
+    expect(result.manifest.entries[0].path).toBe(
+      'stories/manual/clash--story--auto.png',
+    );
+    // Losing an image is worth saying out loud — it is fixable by
+    // renaming, but only if the author hears about it.
+    expect(result.collisions).toEqual([
+      {
+        storyId: 'clash--story',
+        screenshotName: 'auto',
+        keptPath: 'stories/manual/clash--story--auto.png',
+        droppedPath: 'stories/auto/clash--story.png',
+      },
     ]);
   });
 

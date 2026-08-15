@@ -15,10 +15,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   CAPTURE_REPORT_FILE,
   buildCaptureReport,
+  describeCollisions,
   describePartialBuild,
   writeCaptureReport,
 } from '../../src/upload/capture-report.js';
-import type { MergeResult } from '../../src/upload/manifest.js';
+import type {
+  ISnapshotIdCollision,
+  MergeResult,
+} from '../../src/upload/manifest.js';
 import type {
   QlipManifest,
   QlipManifestEntry,
@@ -66,6 +70,7 @@ const entry = (
 const mergeResult = (
   entries: QlipManifestEntry[],
   retractedPaths: string[] = [],
+  collisions: ISnapshotIdCollision[] = [],
 ): MergeResult => {
   const manifest: QlipManifest = {
     tool: { name: 'qlip', version: '0.1.0' },
@@ -90,6 +95,7 @@ const mergeResult = (
     entriesByContext: { 'ctx-a': entries.length },
     retractedCount: retractedPaths.length,
     retractedPaths,
+    collisions,
   };
 };
 
@@ -198,6 +204,33 @@ describe('buildCaptureReport', () => {
     );
     expect(report.orphanScreenshots).toEqual([]);
     expect(describePartialBuild(report)).toBeNull();
+  });
+
+  it('reports a snapshot-id collision instead of calling it a lost capture', async () => {
+    // A manual screenshot named "auto" lands on the same server
+    // snapshot id as the story's auto capture, so only one image can
+    // survive. That is a naming conflict the author can fix — not the
+    // silent loss the partial-build warning is about.
+    await writePng('stories/auto/clash--story.png');
+    await writePng('stories/manual/clash--story--auto.png');
+
+    const report = await buildCaptureReport(
+      buildDir,
+      mergeResult([entry('clash--story')], [], [
+        {
+          storyId: 'clash--story',
+          screenshotName: 'auto',
+          keptPath: 'stories/auto/clash--story.png',
+          droppedPath: 'stories/manual/clash--story--auto.png',
+        },
+      ]),
+    );
+
+    expect(report.orphanScreenshots).toEqual([]);
+    expect(describePartialBuild(report)).toBeNull();
+    const message = describeCollisions(report);
+    expect(message).toContain('clash--story');
+    expect(message).toContain('stories/manual/clash--story--auto.png');
   });
 
   it('writes the report next to the manifest', async () => {

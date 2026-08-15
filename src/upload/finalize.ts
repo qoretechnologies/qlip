@@ -28,6 +28,7 @@ import {
 } from './autodetect.js';
 import {
   buildCaptureReport,
+  describeCollisions,
   describePartialBuild,
   writeCaptureReport,
 } from './capture-report.js';
@@ -107,6 +108,11 @@ export const finalizeBuild = async (
   if (partial) {
     // eslint-disable-next-line no-console
     console.warn(`[qlip] ${partial}`);
+  }
+  const collisions = describeCollisions(report);
+  if (collisions) {
+    // eslint-disable-next-line no-console
+    console.warn(`[qlip] ${collisions}`);
   }
 
   // A partial build still uploads: seeing which stories DID capture is

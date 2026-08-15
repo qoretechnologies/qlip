@@ -55,18 +55,49 @@ const tombstoneKey = (storyId: string, kind: string): string =>
   `${storyId}::${kind}`;
 
 /**
- * Deduplicate manifest entries by `(storyId, kind)`, keeping the LAST
- * occurrence of each key. The "last" rule is intentional: when vite's
+ * Two captures of the same story that qlip-server would store as ONE
+ * snapshot because they share a `screenshotName` — e.g. a manual
+ * `screenshot(ctx, 'auto')` alongside the story's auto capture. Only
+ * one image can survive; the run reports which, so the author can
+ * rename instead of wondering where a screenshot went.
+ */
+export interface ISnapshotIdCollision {
+  storyId: string;
+  screenshotName: string;
+  /** Relative path of the capture that reached the manifest. */
+  keptPath: string;
+  /** Relative path of the capture it displaced. */
+  droppedPath: string;
+}
+
+/**
+ * Deduplicate manifest entries by the identity the SERVER gives a
+ * snapshot: `(storyId, screenshotName)`. qlip-server derives a
+ * snapshot's primary key as `${buildId}-${storyId}-${screenshotName}`
+ * (`qlip-server/src/utils/transforms.ts`), so any two entries sharing
+ * that pair are one row there — whatever their `kind` — and sending
+ * both gets the whole build rejected with `duplicate key value
+ * violates unique constraint snapshots_pkey`.
+ *
+ * Keeping the LAST occurrence is intentional: when vite's
  * dep-optimization re-runs a story file mid-build (a known Storybook
  * addon-vitest interaction — see Storybook #33067), qlip writes a
- * second manifest entry for the same `(storyId, kind)`. The PNG path
- * is deterministic so both entries reference the same file on disk,
- * but the SECOND capture is the more accurate one (it ran with warm
- * deps, after any prior failure recovered). The server-side
- * `snapshots` table enforces `(buildId, storyId, kind)` as the
- * primary key, so without this dedupe the upload pipeline rejects
- * the entire build with `duplicate key value violates unique
- * constraint snapshots_pkey`.
+ * second entry for the same capture. The PNG path is deterministic so
+ * both reference the same file, and the SECOND capture is the more
+ * accurate one (warm deps, after any prior failure recovered).
+ *
+ * This used to key on `(storyId, kind)`, which was wrong in both
+ * directions: it collapsed captures the server stores separately — a
+ * story's second `screenshot()` call, and every error capture after
+ * the first on a retried story — while still letting a manual
+ * screenshot named `auto` collide with the story's auto capture and
+ * take the build down. Collapsing only what the server actually
+ * merges keeps the manifest and the snapshots table in agreement by
+ * construction.
+ *
+ * Losers that pointed at a DIFFERENT image are reported: they are two
+ * real captures competing for one snapshot id, and renaming one is the
+ * only fix — so the run says so rather than dropping an image quietly.
  *
  * Stats are recomputed from the deduped set so storiesTotal /
  * capturedAuto / failed reflect actual unique story captures rather
@@ -74,12 +105,23 @@ const tombstoneKey = (storyId: string, kind: string): string =>
  */
 const dedupeEntries = (
   entries: QlipManifestEntry[],
-): QlipManifestEntry[] => {
+): { entries: QlipManifestEntry[]; collisions: ISnapshotIdCollision[] } => {
   const byKey = new Map<string, QlipManifestEntry>();
+  const collisions: ISnapshotIdCollision[] = [];
   for (const entry of entries) {
-    byKey.set(`${entry.storyId}::${entry.kind}`, entry);
+    const key = `${entry.storyId}::${entry.screenshotName}`;
+    const previous = byKey.get(key);
+    if (previous && previous.path !== entry.path) {
+      collisions.push({
+        storyId: entry.storyId,
+        screenshotName: entry.screenshotName,
+        keptPath: entry.path,
+        droppedPath: previous.path,
+      });
+    }
+    byKey.set(key, entry);
   }
-  return [...byKey.values()];
+  return { entries: [...byKey.values()], collisions };
 };
 
 const computeStats = (
@@ -133,6 +175,11 @@ export interface MergeResult {
   entriesByContext: Record<string, number>;
   /** Entries retracted by a tombstone (the retry-mask prune). */
   retractedCount: number;
+  /**
+   * Captures dropped because another capture of the same story claimed
+   * the same snapshot id. Empty in a healthy build.
+   */
+  collisions: ISnapshotIdCollision[];
   /**
    * Screenshot paths belonging to retracted entries. Their PNGs may
    * still be on disk — deleting them is best-effort and no-ops on
@@ -223,7 +270,7 @@ export const mergeManifestFragments = async (
     }
     liveEntries.push(e);
   }
-  const dedupedEntries = dedupeEntries(liveEntries);
+  const { entries: dedupedEntries, collisions } = dedupeEntries(liveEntries);
 
   const merged: QlipManifest = {
     tool: skeleton.tool,
@@ -251,5 +298,6 @@ export const mergeManifestFragments = async (
     entriesByContext,
     retractedCount: retractedPaths.length,
     retractedPaths,
+    collisions,
   };
 };

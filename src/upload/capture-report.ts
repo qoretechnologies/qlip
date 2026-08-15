@@ -22,7 +22,7 @@
 import { readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { QlipManifest } from '../types.js';
-import type { MergeResult } from './manifest.js';
+import type { ISnapshotIdCollision, MergeResult } from './manifest.js';
 
 export const CAPTURE_REPORT_FILE = 'capture-report.json';
 
@@ -54,6 +54,12 @@ export interface IQlipCaptureReport {
    * without a `removeFile` command.
    */
   retractedScreenshots: string[];
+  /**
+   * Captures that lost a snapshot-id collision — two images of one
+   * story competing for one row on the server. Actionable: rename one
+   * of the two `screenshot()` calls.
+   */
+  collisions: ISnapshotIdCollision[];
 }
 
 /** Recursively collect `stories/**\/*.png`, build-dir-relative, posix. */
@@ -97,6 +103,9 @@ export const buildCaptureReport = async (
   const manifest: QlipManifest = merged.manifest;
   const referenced = new Set(manifest.entries.map((entry) => entry.path));
   const retracted = new Set(merged.retractedPaths);
+  // A collision loser is unreferenced too, but it is not a LOST
+  // capture — it is a named conflict with its own message.
+  const collided = new Set(merged.collisions.map((c) => c.droppedPath));
   const onDisk = await collectScreenshots(buildDir, SCREENSHOT_ROOT);
 
   const byStoryFile: Record<string, number> = {};
@@ -116,9 +125,13 @@ export const buildCaptureReport = async (
     byStatus: countBy(manifest.entries.map((entry) => entry.status)),
     retracted: merged.retractedCount,
     orphanScreenshots: onDisk
-      .filter((file) => !referenced.has(file) && !retracted.has(file))
+      .filter(
+        (file) =>
+          !referenced.has(file) && !retracted.has(file) && !collided.has(file),
+      )
       .sort(),
     retractedScreenshots: onDisk.filter((file) => retracted.has(file)).sort(),
+    collisions: merged.collisions,
   };
 };
 
@@ -131,6 +144,28 @@ export const writeCaptureReport = async (
     JSON.stringify(report, null, 2),
     'utf-8',
   );
+};
+
+/**
+ * One-line human summary of snapshot-id collisions, or `null` when
+ * there are none. Distinct from a partial build: nothing was lost to a
+ * bug, two captures simply cannot share one snapshot id.
+ */
+export const describeCollisions = (
+  report: IQlipCaptureReport,
+  exampleCount = 3,
+): string | null => {
+  const { collisions } = report;
+  if (collisions.length === 0) return null;
+  const examples = collisions
+    .slice(0, exampleCount)
+    .map((c) => `${c.storyId} "${c.screenshotName}" (dropped ${c.droppedPath})`)
+    .join(', ');
+  const more =
+    collisions.length > exampleCount
+      ? `, +${String(collisions.length - exampleCount)} more`
+      : '';
+  return `${String(collisions.length)} capture${collisions.length === 1 ? '' : 's'} dropped — two captures of one story share a screenshot name, and qlip-server stores one snapshot per (story, screenshot name). Rename one: ${examples}${more}.`;
 };
 
 /**

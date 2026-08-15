@@ -180,6 +180,8 @@ export const LoggedIn = {
 };
 ```
 
+Take as many as you like per story — each name is its own snapshot on the server. Give them distinct names: two captures of one story sharing a name (including `auto`, which the automatic capture uses) resolve to one snapshot, and the run warns which image it had to drop.
+
 ## Parameters
 
 Configure screenshots per story via `parameters.qlip`:

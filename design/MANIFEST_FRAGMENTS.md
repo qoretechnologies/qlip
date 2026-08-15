@@ -87,11 +87,19 @@ story ultimately passed" is true whenever the tombstone lands.
    file name for pre-append-only fragments. `readdir` order is not
    deterministic; entry order in `manifest.json` must be.
 3. Drop tombstoned entries.
-4. Dedupe by `(storyId, kind)`, last wins — vite's dep-optimization can
-   re-run a story file mid-build (Storybook #33067) and the second
-   capture is the more accurate one. The server's `snapshots` primary
-   key is `(buildId, storyId, kind)`, so this also keeps the upload
-   from being rejected wholesale.
+4. Dedupe by `(storyId, screenshotName)`, last wins — vite's
+   dep-optimization can re-run a story file mid-build (Storybook
+   #33067) and the second capture is the more accurate one.
+
+   That pair is the identity qlip-server gives a snapshot: its primary
+   key is `${buildId}-${storyId}-${screenshotName}`
+   (`qlip-server/src/utils/transforms.ts`) — `kind` is NOT part of it.
+   Collapsing exactly what the server collapses is what keeps a build
+   from being rejected wholesale on `snapshots_pkey`, and keeps qlip
+   from dropping captures the server would have stored. Two captures
+   that share a name but not an image (a manual `screenshot(ctx,
+   'auto')` next to the story's auto capture) cannot both survive; the
+   run names them so the author can rename one.
 5. Recompute stats from the surviving entries and write
    `manifest.json`.
 
@@ -108,7 +116,8 @@ on disk against the manifest that claims to describe them
 
 - writes `<buildDir>/capture-report.json` — entries per context, per
   story file, per kind/status, retractions, and any orphans;
-- warns when a PNG has no manifest entry and no tombstone explains it,
+- warns when a PNG has no manifest entry and neither a tombstone nor a
+  snapshot-id collision explains it,
   naming examples. Retracted captures are listed separately, not as
   orphans: deleting their PNGs is best-effort and no-ops on Vitest
   versions without a `removeFile` command, and an audit that cries
