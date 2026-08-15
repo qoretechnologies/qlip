@@ -196,19 +196,70 @@ Tests (all must fail against current `develop`):
       (ctx <fragmentId> #<seq>)`.
 - [x] Tests for both.
 
-### Phase 4 — executed-vs-captured census (DEFERRED — not in this PR)
+### Phase 4 — executed-vs-captured census (investigated 2026-08-15, not built)
 
-- [ ] Have `QlipUploadReporter` record the story tests Vitest actually
-      ran (V2 `onFinished(files)` / V3+ `onTestModuleEnd`), stash it
-      where `finalizeBuild` can read it (both the reporter and the
-      globalSetup teardown can finalize, and either may win), and warn
-      when the merged manifest holds fewer stories than were executed —
-      listing what is missing.
+**Verdict: build it, reporter-side. It is cheaper and sharper than the
+estimate that deferred it.** The doubt was whether Vitest's reporter
+payload could tell story tests from ordinary ones, and whether it
+arrived before the merge. A throwaway probe reporter run against this
+repo's storybook project answered both:
+
+```
+atRunEnd: {"total":13,"withStoryId":13}
+onTestModuleEnd | Button.stories.ts | tests 4 | withStoryId 4 |
+  example-button--primary,example-button--secondary,example-button--large,example-button--small
+```
+
+- `TestCase.meta().storyId` is populated for **every** story test
+  (13/13), so the census names story ids — not just counts. A gap
+  report can therefore list exactly WHICH stories never captured,
+  which is what #25 asked for and what no other signal provides.
+- `onTestModuleEnd` fires per story file **during** the run, so the
+  census is complete before either finalize path runs. That kills the
+  ordering hazard (the reporter and the globalSetup teardown race to
+  finalize, and either can win).
+- The invariant to check is `story tests executed == auto entries`
+  (captured + skipped + failed), verified on the demo run: 13 tests →
+  13 auto entries (+1 manual = 14 total). Manual and error entries are
+  extra and must not be counted.
+- Cost is an in-memory tree walk in the Node process: no I/O, nothing
+  in the browser, no new hook that could fail a user's test.
+
+Against the reported incident it would have printed, on the FIRST
+build: `1713 story tests executed, 560 captured — 1153 missing`, plus
+the missing ids. That is the difference between one run and three
+builds plus a week of elimination.
+
+- [ ] `src/upload/census.ts` — symbol-keyed on `globalThis` (same
+      pattern as `__QLIP_FINALIZE_CONFIG__`), so whichever path
+      finalizes can read it; reporters and globalSetup share the Node
+      process.
+- [ ] `QlipUploadReporter` — `onTestModuleEnd` (V3+) and
+      `onFinished(files)` (V2) accumulate `meta.storyId` per module.
+- [ ] `finalizeBuild` — diff census vs auto entries, warn with counts
+      + the missing ids grouped by story file, and fold both into
+      `capture-report.json`.
 - [ ] Tests against both lifecycle shapes.
 
-This is the only piece that can name a story that *never captured at
-all* (no PNG, so Phase 2 can't see it), and the most speculative — it
-reaches into Vitest's task tree across three major versions.
+Design constraints found while investigating — get these wrong and the
+check is worse than nothing:
+
+1. **No census means silence, never "everything is missing."** On
+   Vitest 2 in workspace mode the reporter can be lifecycle-dead (the
+   reason `globalSetup` teardown exists at all), and on V2 the census
+   can only be built at `onFinished`, which may lose the race to
+   teardown. An absent census is "unknown", not zero.
+2. **`auto: false` is not a lost capture.** A story with auto capture
+   disabled produces no auto entry by design. Skip the check when the
+   resolved default is `auto: false`; per-story overrides are
+   invisible from the reporter, so treat the count as advisory and
+   never make it fail a build.
+3. **Count only tests carrying `meta.storyId`** — a consumer's
+   non-story browser tests in the same project would otherwise read as
+   missing captures.
+4. V2's task-tree shape (`file.tasks[]` + `task.meta`) is unverified
+   locally — no Vitest 2 install on this machine. Verify against
+   qorus-ide before trusting the V2 branch.
 
 ### Phase 5 — docs + release
 
