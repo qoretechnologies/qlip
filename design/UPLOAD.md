@@ -134,6 +134,14 @@ for matching.
 
 ---
 
+## Where the manifest comes from
+
+`manifest.json` is produced at end-of-run by merging the per-capture
+fragments both capture paths write under `manifest-fragments/`. That
+contract — append-only fragments, tombstones, merge ordering, and the
+post-merge audit that flags a partial build — is documented in
+[`MANIFEST_FRAGMENTS.md`](MANIFEST_FRAGMENTS.md).
+
 ## Manifest entry kinds
 
 Every `entries[]` row carries a discriminating `kind`. The contract

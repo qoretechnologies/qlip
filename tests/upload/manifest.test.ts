@@ -20,9 +20,11 @@ import {
   MANIFEST_FRAGMENT_DIR,
   mergeManifestFragments,
 } from '../../src/upload/manifest.js';
+import { fragmentFileName } from '../../src/fs/output.js';
 import type {
   QlipManifest,
   QlipManifestEntry,
+  QlipManifestFragment,
   QlipResolvedDefaults,
 } from '../../src/types.js';
 
@@ -345,5 +347,161 @@ describe('mergeManifestFragments', () => {
       width: 1280,
       height: 720,
     });
+  });
+});
+
+/**
+ * Append-only fragments — issues #25 / #26. One file per capture, so
+ * the merge is where a run's captures actually become a build.
+ */
+describe('mergeManifestFragments — append-only fragments', () => {
+  const captureFragment = (
+    fragmentId: string,
+    seq: number,
+    entries: QlipManifestEntry[],
+    createdAt = '2026-08-15T10:00:00.000Z',
+  ): QlipManifestFragment => ({
+    ...fragment(createdAt, entries),
+    fragmentId,
+    fragmentSeq: seq,
+  });
+
+  const writeCaptureFragment = async (
+    f: QlipManifestFragment,
+  ): Promise<void> => {
+    await writeFile(
+      path.join(
+        buildDir,
+        MANIFEST_FRAGMENT_DIR,
+        fragmentFileName(f.fragmentId as string, f.fragmentSeq as number),
+      ),
+      JSON.stringify(f),
+    );
+  };
+
+  it('merges every capture and reports contexts, not file count', async () => {
+    // Two contexts of one process, plus a third from a second CI shard
+    // sharing the same --build-dir (issue #25's shape).
+    await writeCaptureFragment(captureFragment('ctx-a', 1, [entry('a1')]));
+    await writeCaptureFragment(captureFragment('ctx-a', 2, [entry('a2')]));
+    await writeCaptureFragment(captureFragment('ctx-b', 1, [entry('b1')]));
+    await writeCaptureFragment(
+      captureFragment('ctx-c', 1, [entry('c1')], '2026-08-15T11:00:00.000Z'),
+    );
+
+    const result = await mergeManifestFragments(buildDir);
+    if (!result) throw new Error('expected merge result');
+
+    expect(result.manifest.entries.map((e) => e.storyId)).toEqual([
+      'a1',
+      'a2',
+      'b1',
+      'c1',
+    ]);
+    expect(result.fragmentCount).toBe(4);
+    expect(result.contextCount).toBe(3);
+    expect(result.entriesByContext).toEqual({ 'ctx-a': 2, 'ctx-b': 1, 'ctx-c': 1 });
+    expect(result.manifest.stats.capturedAuto).toBe(4);
+  });
+
+  it('orders a context by fragmentSeq, not by file listing order', async () => {
+    // Sequence numbers past 9 are where a naive lexicographic sort
+    // breaks; write them out of order to prove the merge does not
+    // depend on readdir order.
+    for (const seq of [11, 2, 9, 1, 10]) {
+      await writeCaptureFragment(
+        captureFragment('ctx-a', seq, [entry(`s${String(seq)}`)]),
+      );
+    }
+
+    const result = await mergeManifestFragments(buildDir);
+    if (!result) throw new Error('expected merge result');
+    expect(result.manifest.entries.map((e) => e.storyId)).toEqual([
+      's1',
+      's2',
+      's9',
+      's10',
+      's11',
+    ]);
+  });
+
+  it('drops entries retracted by a tombstone, whatever order it merges in', async () => {
+    // The error capture is written BEFORE the tombstone that retracts
+    // it (attempt 1 failed, the retry passed)...
+    await writeCaptureFragment(
+      captureFragment('ctx-a', 1, [
+        entry('flaky--story', { kind: 'error', screenshotName: 'qlip-auto-error-capture' }),
+      ]),
+    );
+    await writeCaptureFragment({
+      ...captureFragment('ctx-a', 2, []),
+      tombstones: [{ storyId: 'flaky--story', kind: 'error' }],
+    });
+    // ...and a second context retracts an error it wrote afterwards,
+    // so ordering cannot be what makes this work.
+    await writeCaptureFragment({
+      ...captureFragment('ctx-b', 1, []),
+      tombstones: [{ storyId: 'other--story', kind: 'error' }],
+    });
+    await writeCaptureFragment(
+      captureFragment('ctx-b', 2, [
+        entry('other--story', { kind: 'error', screenshotName: 'qlip-auto-error-capture' }),
+      ]),
+    );
+    await writeCaptureFragment(captureFragment('ctx-b', 3, [entry('other--story')]));
+
+    const result = await mergeManifestFragments(buildDir);
+    if (!result) throw new Error('expected merge result');
+
+    expect(result.manifest.entries.map((e) => e.storyId)).toEqual([
+      'other--story',
+    ]);
+    expect(result.manifest.entries[0].kind).toBe('auto');
+    expect(result.retractedCount).toBe(2);
+    // Their PNGs may survive on disk (deletion is best-effort), so the
+    // paths travel with the result for the partial-build audit.
+    expect(result.retractedPaths.sort()).toEqual([
+      'stories/auto/flaky--story.png',
+      'stories/auto/other--story.png',
+    ]);
+    // A retracted error must not leave the build looking failed.
+    expect(result.manifest.stats.failed).toBe(0);
+  });
+
+  it('merges fragments written by an older qlip alongside new ones', async () => {
+    // Pre-fix fragments hold a whole manifest and carry no
+    // fragmentId/fragmentSeq — a shared build dir can hold both when
+    // CI shards run different qlip versions.
+    await writeFragment(
+      'legacy-context',
+      fragment('2026-08-15T09:00:00.000Z', [entry('old1'), entry('old2')]),
+    );
+    await writeCaptureFragment(captureFragment('ctx-new', 1, [entry('new1')]));
+
+    const result = await mergeManifestFragments(buildDir);
+    if (!result) throw new Error('expected merge result');
+    expect(result.manifest.entries.map((e) => e.storyId)).toEqual([
+      'old1',
+      'old2',
+      'new1',
+    ]);
+    expect(result.contextCount).toBe(2);
+  });
+
+  it('merges a fragment set larger than the read batch size', async () => {
+    // A ~1700-story suite writes ~1700 fragments; reads are batched, so
+    // cover more than one batch.
+    const total = 300;
+    for (let i = 0; i < total; i += 1) {
+      await writeCaptureFragment(
+        captureFragment('ctx-a', i + 1, [entry(`story-${String(i)}`)]),
+      );
+    }
+    const result = await mergeManifestFragments(buildDir);
+    if (!result) throw new Error('expected merge result');
+    expect(result.manifest.entries).toHaveLength(total);
+    expect(result.manifest.stats.capturedAuto).toBe(total);
+    expect(result.fragmentCount).toBe(total);
+    expect(result.contextCount).toBe(1);
   });
 });

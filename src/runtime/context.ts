@@ -15,15 +15,18 @@ export interface QlipRuntimeState {
   warnedMissingStorybook: boolean;
   consoleLogs: QlipConsoleMessage[];
   /**
-   * Unique-per-browser-context identifier used as the fragment
-   * filename when writing this context's manifest to
-   * `<buildDir>/manifest-fragments/`. Each `*.stories.tsx` runs in
-   * its own browser context with its own QlipRuntimeState (initialized
-   * here); without a per-context fragment, contexts would overwrite
-   * each other's writes to a shared `manifest.json`. See
-   * `src/upload/manifest.ts` for the Node-side merge.
+   * Identifies this browser context in the fragment file names it
+   * writes under `<buildDir>/manifest-fragments/`. Paired with
+   * `fragmentSeq` it makes every capture's file name unique, which is
+   * what lets fragments be append-only. See `src/upload/manifest.ts`
+   * for the Node-side merge.
    */
   fragmentId: string;
+  /**
+   * Captures written by this context so far. Incremented per fragment
+   * write; never reused, so no fragment file is ever written twice.
+   */
+  fragmentSeq: number;
 }
 
 const GLOBAL_KEY = '__QLIP_RUNTIME__';
@@ -75,10 +78,11 @@ export const initRuntimeState = (): QlipRuntimeState | null => {
   });
 
   // Fragment ID needs to be unique per browser context, not unique per
-  // build. Stamp time + random suffix is plenty (each context is its
-  // own process / module graph, so two contexts can't race here).
-  // Math.random() alone would collide ~1 in 16M; with the millis
-  // prefix that risk is gone.
+  // build: under `isolate: false` several test files share one context
+  // (and one of these states), and several vitest processes can share
+  // one build dir. Stamp time + random suffix covers both — Math.random()
+  // alone would collide ~1 in 16M; with the millis prefix that risk is
+  // gone.
   const fragmentId = `${realDateNow().toString(36)}-${Math.random()
     .toString(36)
     .slice(2, 10)}`;
@@ -91,6 +95,7 @@ export const initRuntimeState = (): QlipRuntimeState | null => {
     warnedMissingStorybook: false,
     consoleLogs: [],
     fragmentId,
+    fragmentSeq: 0,
   };
 
   const globalState = globalThis as {
@@ -115,6 +120,19 @@ export const pushEntry = (
   entry: QlipManifestEntry,
 ) => {
   state.manifest.entries.push(entry);
+};
+
+/**
+ * Claim the next fragment sequence number for this context.
+ *
+ * Synchronous and unshared, so two overlapping captures — the
+ * `afterEach` hooks of two test files in one context under
+ * `isolate: false` — can never claim the same number, and therefore
+ * never write the same fragment file.
+ */
+export const nextFragmentSeq = (state: QlipRuntimeState): number => {
+  state.fragmentSeq += 1;
+  return state.fragmentSeq;
 };
 
 /**

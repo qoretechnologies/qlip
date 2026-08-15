@@ -46,6 +46,7 @@ interface IParsedArgs {
   branch?: string;
   commit?: string;
   failOnUploadError: boolean;
+  failOnPartialBuild: boolean;
   help: boolean;
 }
 
@@ -69,13 +70,19 @@ Options:
   --commit <sha>              Override commit detection.
   --fail-on-upload-error      Exit non-zero on upload failure (default:
                               log error + exit 0).
+  --fail-on-partial-build     Exit non-zero when screenshots on disk are
+                              missing from the manifest (default: warn).
   -h, --help                  Show this help.
 
 Env vars override defaults; CLI flags override env vars.
 `;
 
 const parseArgs = (argv: string[]): IParsedArgs => {
-  const args: IParsedArgs = { failOnUploadError: false, help: false };
+  const args: IParsedArgs = {
+    failOnUploadError: false,
+    failOnPartialBuild: false,
+    help: false,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     const next = (): string | undefined => argv[++i];
@@ -107,6 +114,9 @@ const parseArgs = (argv: string[]): IParsedArgs => {
         break;
       case '--fail-on-upload-error':
         args.failOnUploadError = true;
+        break;
+      case '--fail-on-partial-build':
+        args.failOnPartialBuild = true;
         break;
       default:
         if (arg.startsWith('-')) {
@@ -210,6 +220,7 @@ export const runUpload = async (
     ...(parsed.branch !== undefined ? { branch: parsed.branch } : {}),
     ...(parsed.commit !== undefined ? { commit: parsed.commit } : {}),
     failOnUploadError: parsed.failOnUploadError,
+    failOnPartialBuild: parsed.failOnPartialBuild,
   };
 
   // finalizeBuild needs a runtime config but only reads `buildDir`
@@ -228,8 +239,9 @@ export const runUpload = async (
   try {
     await finalizeBuild({ runtime, upload });
   } catch (err) {
-    // finalizeBuild only throws if failOnUploadError is set AND
-    // upload failed. So if we get here, the CLI should exit non-zero.
+    // finalizeBuild only throws when the caller opted in: upload
+    // failed with --fail-on-upload-error, or the build came out
+    // partial with --fail-on-partial-build. Either way, exit non-zero.
     logger.error(`qlip-upload: ${(err as Error).message}`);
     return { exitCode: 2, buildDir };
   }

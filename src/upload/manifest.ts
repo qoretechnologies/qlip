@@ -1,28 +1,58 @@
 /**
- * Node-side helper that merges per-browser-context manifest fragments
- * into the final `manifest.json`.
+ * Node-side helper that merges per-capture manifest fragments into the
+ * final `manifest.json`.
  *
- * Why this exists: in Vitest browser-mode every `*.stories.tsx` runs
- * in its own browser context (its own iframe + module graph). Each
- * context initializes a fresh `QlipRuntimeState` with an empty
- * manifest, then writes the full manifest to disk after every capture.
- * If they all wrote to the same `manifest.json` the writes would
- * clobber each other — the last test file to finish would win, and
- * earlier files' entries would be stranded on disk and never reach
- * the upload reporter.
+ * Why this exists: captures happen in the browser, concurrently, in
+ * however many contexts Vitest decides to use — and, when CI shards a
+ * suite across several `vitest run` invocations pinned to one
+ * `--build-dir`, in several processes too. None of them can safely
+ * share a mutable `manifest.json`.
  *
- * Fix: each context writes its in-memory manifest to a unique fragment
- * file under `manifest-fragments/`. This merger reads them all back
- * once Vitest signals end-of-run and produces the canonical
+ * So each capture writes its own append-only fragment under
+ * `manifest-fragments/` (see `design/MANIFEST_FRAGMENTS.md`), and this
+ * merger reads them all back at end-of-run and produces the canonical
  * `manifest.json` from the union.
  */
 
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { MANIFEST_FRAGMENT_DIR } from '../fs/output.js';
-import type { QlipManifest, QlipManifestEntry } from '../types.js';
+import type {
+  QlipManifest,
+  QlipManifestEntry,
+  QlipManifestFragment,
+} from '../types.js';
 
 export { MANIFEST_FRAGMENT_DIR };
+
+/**
+ * How many fragment files to read at once. A ~1700-story run writes
+ * ~1700 fragments, and a shared build dir across ~10 CI shards can
+ * hold ~17k; reading them one at a time is needlessly slow, and
+ * unbounded `Promise.all` exhausts file descriptors.
+ */
+const READ_CONCURRENCY = 64;
+
+const readFragments = async (
+  fragmentsDir: string,
+  files: string[],
+): Promise<{ file: string; fragment: QlipManifestFragment }[]> => {
+  const out: { file: string; fragment: QlipManifestFragment }[] = [];
+  for (let i = 0; i < files.length; i += READ_CONCURRENCY) {
+    const batch = files.slice(i, i + READ_CONCURRENCY);
+    const parsed = await Promise.all(
+      batch.map(async (file) => {
+        const text = await readFile(path.join(fragmentsDir, file), 'utf-8');
+        return { file, fragment: JSON.parse(text) as QlipManifestFragment };
+      }),
+    );
+    out.push(...parsed);
+  }
+  return out;
+};
+
+const tombstoneKey = (storyId: string, kind: string): string =>
+  `${storyId}::${kind}`;
 
 /**
  * Deduplicate manifest entries by `(storyId, kind)`, keeping the LAST
@@ -91,8 +121,25 @@ const computeStats = (
 
 export interface MergeResult {
   manifest: QlipManifest;
-  /** How many fragment files contributed to the merge. */
+  /**
+   * How many fragment files contributed to the merge — one per capture
+   * since the append-only change, so NOT a count of browser contexts.
+   * Use `contextCount` for that.
+   */
   fragmentCount: number;
+  /** Distinct browser contexts / processes that captured anything. */
+  contextCount: number;
+  /** Entries per context, keyed by `fragmentId`. For diagnostics. */
+  entriesByContext: Record<string, number>;
+  /** Entries retracted by a tombstone (the retry-mask prune). */
+  retractedCount: number;
+  /**
+   * Screenshot paths belonging to retracted entries. Their PNGs may
+   * still be on disk — deleting them is best-effort and no-ops on
+   * Vitest versions without a `removeFile` command — so the partial-
+   * build audit must not mistake them for lost captures.
+   */
+  retractedPaths: string[];
 }
 
 /**
@@ -121,35 +168,62 @@ export const mergeManifestFragments = async (
   const jsonFiles = files.filter((f) => f.endsWith('.json'));
   if (jsonFiles.length === 0) return null;
 
-  // Each fragment is a full QlipManifest captured by one browser
-  // context. The build-level fields (tool/buildId/outputDir/defaults)
-  // are identical across them because every context reads the same
-  // runtime config; we can pick any one as the skeleton.
-  const fragments: QlipManifest[] = [];
-  for (const file of jsonFiles) {
-    const text = await readFile(path.join(fragmentsDir, file), 'utf-8');
-    fragments.push(JSON.parse(text) as QlipManifest);
-  }
+  // Each fragment carries the capture it recorded plus the build-level
+  // fields (tool/buildId/outputDir/defaults), which are identical
+  // across them because every context reads the same runtime config;
+  // we can pick any one as the skeleton.
+  const fragments = await readFragments(fragmentsDir, jsonFiles);
 
-  // Sort by createdAt so entry order is deterministic across runs.
-  // (Within a fragment, entries are already in capture order.)
-  fragments.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  // Deterministic order across runs — `readdir` order is not. Fragments
+  // written before the append-only change carry no fragmentId/Seq, so
+  // fall back to the file name, which was `<fragmentId>.json` then.
+  fragments.sort((a, b) => {
+    const byCreatedAt = a.fragment.createdAt.localeCompare(
+      b.fragment.createdAt,
+    );
+    if (byCreatedAt !== 0) return byCreatedAt;
+    const byContext = (a.fragment.fragmentId ?? a.file).localeCompare(
+      b.fragment.fragmentId ?? b.file,
+    );
+    if (byContext !== 0) return byContext;
+    return (a.fragment.fragmentSeq ?? 0) - (b.fragment.fragmentSeq ?? 0);
+  });
 
   // jsonFiles.length > 0 above guarantees fragments[0] exists; qlip's
   // tsconfig doesn't set noUncheckedIndexedAccess so the type is
-  // already QlipManifest rather than QlipManifest | undefined.
-  const skeleton = fragments[0];
-  // Concatenate all fragment entries in chronological order, then
-  // dedupe by (storyId, kind). The deterministic sort + last-wins
-  // semantics keep the SECOND/LATEST capture of each story when
-  // vite-reopt or the addon-vitest re-runs a file mid-build.
+  // already QlipManifestFragment rather than `| undefined`.
+  const skeleton = fragments[0].fragment;
+  // Concatenate all fragment entries in capture order, then dedupe by
+  // (storyId, kind). The deterministic sort + last-wins semantics keep
+  // the SECOND/LATEST capture of each story when vite-reopt or the
+  // addon-vitest re-runs a file mid-build.
   const allEntries: QlipManifestEntry[] = [];
+  const entriesByContext: Record<string, number> = {};
+  const retracted = new Set<string>();
   let maxDurationMs = 0;
-  for (const frag of fragments) {
-    allEntries.push(...frag.entries);
-    maxDurationMs = Math.max(maxDurationMs, frag.stats.durationMs);
+  for (const { file, fragment } of fragments) {
+    allEntries.push(...fragment.entries);
+    const contextId = fragment.fragmentId ?? file;
+    entriesByContext[contextId] =
+      (entriesByContext[contextId] ?? 0) + fragment.entries.length;
+    for (const tombstone of fragment.tombstones ?? []) {
+      retracted.add(tombstoneKey(tombstone.storyId, tombstone.kind));
+    }
+    maxDurationMs = Math.max(maxDurationMs, fragment.stats.durationMs);
   }
-  const dedupedEntries = dedupeEntries(allEntries);
+  // Tombstones apply regardless of merge order — see
+  // QlipManifestTombstone. Track what they actually removed so the
+  // caller can report it rather than silently shrinking the build.
+  const liveEntries: QlipManifestEntry[] = [];
+  const retractedPaths: string[] = [];
+  for (const e of allEntries) {
+    if (retracted.size && retracted.has(tombstoneKey(e.storyId, e.kind))) {
+      retractedPaths.push(e.path);
+      continue;
+    }
+    liveEntries.push(e);
+  }
+  const dedupedEntries = dedupeEntries(liveEntries);
 
   const merged: QlipManifest = {
     tool: skeleton.tool,
@@ -170,5 +244,12 @@ export const mergeManifestFragments = async (
     JSON.stringify(merged, null, 2),
     'utf-8',
   );
-  return { manifest: merged, fragmentCount: fragments.length };
+  return {
+    manifest: merged,
+    fragmentCount: fragments.length,
+    contextCount: Object.keys(entriesByContext).length,
+    entriesByContext,
+    retractedCount: retractedPaths.length,
+    retractedPaths,
+  };
 };

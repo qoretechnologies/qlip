@@ -5,7 +5,11 @@ import {
   screenshot,
 } from '../../src/runtime/screenshot.js';
 import { getRuntimeState } from '../../src/runtime/context.js';
-import type { QlipRuntimeConfig } from '../../src/types.js';
+import type {
+  QlipManifest,
+  QlipManifestFragment,
+  QlipRuntimeConfig,
+} from '../../src/types.js';
 
 vi.mock('@vitest/browser/context', () => {
   const page = {
@@ -774,5 +778,225 @@ describe('screenshot capture', () => {
     expect(entry?.error?.stack).toBe(
       '    at play (Foo.stories.ts:42:3)',
     );
+  });
+});
+
+/**
+ * Fragment durability — issues #25 / #26.
+ *
+ * qlip used to re-serialise the context's whole manifest into one file
+ * per context on every capture. Under `isolate: false` several story
+ * files share a context and their `afterEach` hooks overlap, so two
+ * captures could serialise the shared array and both write the same
+ * path — whichever landed last won, and it was not necessarily the one
+ * holding the most entries.
+ */
+describe('manifest fragment durability', () => {
+  const deferred = () => {
+    let resolve!: (value?: unknown) => void;
+    const promise = new Promise((r) => {
+      resolve = r as (value?: unknown) => void;
+    });
+    return { promise, resolve };
+  };
+
+  /** Let queued microtasks + timers drain. */
+  const settle = async () => {
+    for (let i = 0; i < 5; i += 1) await new Promise((r) => setTimeout(r, 0));
+  };
+
+  const useFastConfig = () => {
+    resetRuntime();
+    globalThis.__QLIP_CONFIG__ = {
+      ...runtimeConfig,
+      defaults: {
+        ...runtimeConfig.defaults,
+        waitForIdleMs: 0,
+        maxWaitForIdleMs: 0,
+        captureConsole: false,
+      },
+    };
+  };
+
+  const fragmentWrites = (calls: unknown[][]) =>
+    calls.filter((call) => String(call[0]).includes('manifest-fragments'));
+
+  it('keeps both entries when two captures in one context interleave', async () => {
+    useFastConfig();
+    const { page, commands } = await import('@vitest/browser/context');
+
+    const shotA = deferred();
+    const shotB = deferred();
+    let shots = 0;
+    page.screenshot.mockImplementation(() => {
+      shots += 1;
+      return shots === 1 ? shotA.promise : shotB.promise;
+    });
+
+    // Models a real filesystem: the write that LANDS last wins.
+    const disk = new Map<string, string>();
+    const gates: { resolve: () => void }[] = [];
+    commands.writeFile.mockImplementation(async (p: string, data: string) => {
+      if (!p.includes('manifest-fragments')) {
+        disk.set(p, data);
+        return;
+      }
+      const gate = deferred();
+      gates.push({
+        resolve: () => {
+          gate.resolve();
+        },
+      });
+      await gate.promise;
+      disk.set(p, data);
+    });
+
+    // Capture A must clear `ensureBrowserContext` before B starts:
+    // Vitest's module mocker mis-resolves `@vitest/browser/context`
+    // when two dynamic imports of it are in flight at once. Staggering
+    // is also the truer model of two `afterEach` hooks.
+    const captureA = screenshot({ id: 'a--one', title: 'A', name: 'One' }, 'shot');
+    await settle();
+    const captureB = screenshot({ id: 'b--two', title: 'B', name: 'Two' }, 'shot');
+    await settle();
+
+    shotA.resolve('ok');
+    await settle();
+    shotB.resolve('ok');
+    await settle();
+
+    // A's fragment write lands AFTER B's — the ordering that used to
+    // truncate the manifest back to A alone.
+    expect(gates).toHaveLength(2);
+    gates[1].resolve();
+    await settle();
+    gates[0].resolve();
+    await settle();
+    await Promise.all([captureA, captureB]);
+
+    const stored = [...disk.entries()].filter(([p]) =>
+      p.includes('manifest-fragments'),
+    );
+    const storyIds = stored
+      .flatMap(([, data]) => (JSON.parse(data) as QlipManifest).entries)
+      .map((e) => e.storyId)
+      .sort();
+    expect(storyIds).toEqual(['a--one', 'b--two']);
+  });
+
+  it('writes one fragment per capture and never reuses a file name', async () => {
+    useFastConfig();
+    const { page, commands } = await import('@vitest/browser/context');
+    page.screenshot.mockResolvedValue('ok');
+
+    const ctx = { id: 'example--button', title: 'Example/Button', name: 'Primary' };
+    await screenshot(ctx, 'first');
+    await screenshot(ctx, 'second');
+    await screenshot(ctx, 'third');
+
+    const paths = fragmentWrites(commands.writeFile.mock.calls).map((call) =>
+      String(call[0]),
+    );
+    expect(paths).toHaveLength(3);
+    expect(new Set(paths).size).toBe(3);
+
+    const state = getRuntimeState();
+    for (const p of paths) {
+      expect(p).toContain(state!.fragmentId);
+    }
+    // Sequence is per-context and monotonic, so fragments sort into
+    // capture order at merge time.
+    expect(
+      fragmentWrites(commands.writeFile.mock.calls).map(
+        (call) => (JSON.parse(String(call[1])) as QlipManifestFragment).fragmentSeq,
+      ),
+    ).toEqual([1, 2, 3]);
+    // Each fragment carries exactly the capture it recorded.
+    expect(
+      fragmentWrites(commands.writeFile.mock.calls).map(
+        (call) =>
+          (JSON.parse(String(call[1])) as QlipManifest).entries.map(
+            (e) => e.screenshotName,
+          ),
+      ),
+    ).toEqual([['first'], ['second'], ['third']]);
+  });
+
+  it('logs one line per capture only when diagnostics is enabled', async () => {
+    const { page } = await import('@vitest/browser/context');
+    page.screenshot.mockResolvedValue('ok');
+    const logged: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => {
+      logged.push(args.map(String).join(' '));
+    };
+
+    try {
+      resetRuntime();
+      globalThis.__QLIP_CONFIG__ = {
+        ...runtimeConfig,
+        defaults: { ...runtimeConfig.defaults, waitForIdleMs: 0, maxWaitForIdleMs: 0 },
+      };
+      await screenshot({ id: 'quiet--story', title: 'Q', name: 'Quiet' }, 'shot');
+      expect(logged.filter((line) => line.includes('[qlip] captured'))).toEqual([]);
+
+      resetRuntime();
+      globalThis.__QLIP_CONFIG__ = {
+        ...runtimeConfig,
+        diagnostics: true,
+        defaults: { ...runtimeConfig.defaults, waitForIdleMs: 0, maxWaitForIdleMs: 0 },
+      };
+      await screenshot({ id: 'loud--story', title: 'L', name: 'Loud' }, 'shot');
+      const captured = logged.filter((line) => line.includes('[qlip] captured'));
+      expect(captured).toHaveLength(1);
+      // Names the story, where it landed, and which context wrote it —
+      // the three facts a partial CI build needs and used to lack.
+      expect(captured[0]).toContain('loud--story');
+      expect(captured[0]).toContain('stories/manual/L--Loud--shot.png');
+      expect(captured[0]).toContain(getRuntimeState()!.fragmentId);
+    } finally {
+      console.log = originalLog;
+    }
+  });
+
+  it('retracts pruned error entries with a tombstone fragment', async () => {
+    resetRuntime();
+    globalThis.__QLIP_CONFIG__ = {
+      ...runtimeConfig,
+      defaults: {
+        ...runtimeConfig.defaults,
+        captureOnError: true,
+        waitForIdleMs: 0,
+        maxWaitForIdleMs: 0,
+      },
+    };
+    const { page, commands } = await import('@vitest/browser/context');
+    page.screenshot.mockResolvedValue('ok');
+    commands.removeFile.mockResolvedValue(undefined);
+
+    const task = (state: 'fail' | 'pass', retryCount: number) => ({
+      task: {
+        meta: { storyId: 'example--page' },
+        name: 'Logged In',
+        suite: { name: 'Example/Page' },
+        result:
+          state === 'fail'
+            ? { state, retryCount, errors: [{ message: 'flake', stack: '' }] }
+            : { state, retryCount },
+      },
+      story: { id: 'example--page' },
+    });
+
+    await captureAutoScreenshot(task('fail', 0) as never);
+    await captureErrorScreenshot(task('fail', 0) as never);
+    await captureAutoScreenshot(task('pass', 1) as never);
+
+    // The error fragment is already on disk and can no longer be
+    // rewritten, so the prune has to retract it explicitly — otherwise
+    // the merge resurrects a failure the retry disproved.
+    const tombstones = fragmentWrites(commands.writeFile.mock.calls)
+      .map((call) => JSON.parse(String(call[1])) as QlipManifestFragment)
+      .flatMap((fragment) => fragment.tombstones ?? []);
+    expect(tombstones).toEqual([{ storyId: 'example--page', kind: 'error' }]);
   });
 });

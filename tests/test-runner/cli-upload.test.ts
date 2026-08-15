@@ -413,3 +413,79 @@ describe('runUpload', () => {
     expect(recordedRequests).toHaveLength(0);
   });
 });
+
+/**
+ * Partial-build detection — issues #25 / #26. A CI run that lost
+ * manifest records used to upload and exit 0, so nobody found out
+ * until a reviewer noticed the build was small.
+ */
+describe('runUpload — partial builds', () => {
+  /** Add a PNG that no manifest entry references. */
+  const orphanScreenshot = async (buildDir: string): Promise<void> => {
+    await writeFile(
+      path.join(buildDir, 'stories', 'auto', 'Lost--Story.png'),
+      Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+    );
+  };
+
+  it('warns and still uploads when screenshots are missing from the manifest', async () => {
+    const buildDir = await seedBuildDir(tmpRoot, '20991231-235959');
+    await orphanScreenshot(buildDir);
+    const log = vi.fn();
+    const error = vi.fn();
+
+    const result = await runUpload(
+      ['--build-dir', buildDir, '--server-url', 'http://localhost:3100'],
+      {},
+      { log, error },
+    );
+
+    // Uploading anyway is deliberate: seeing which stories DID land is
+    // how a partial build gets diagnosed.
+    expect(result.exitCode).toBe(0);
+    expect(
+      recordedRequests.some((r) => r.url.endsWith('/api/builds')),
+    ).toBe(true);
+    const report = JSON.parse(
+      await readFile(path.join(buildDir, 'capture-report.json'), 'utf-8'),
+    ) as { orphanScreenshots: string[] };
+    expect(report.orphanScreenshots).toEqual(['stories/auto/Lost--Story.png']);
+  });
+
+  it('exits 2 with --fail-on-partial-build when screenshots are missing', async () => {
+    const buildDir = await seedBuildDir(tmpRoot, '20991231-235959');
+    await orphanScreenshot(buildDir);
+
+    const result = await runUpload(
+      [
+        '--build-dir',
+        buildDir,
+        '--server-url',
+        'http://localhost:3100',
+        '--fail-on-partial-build',
+      ],
+      {},
+      { log: vi.fn(), error: vi.fn() },
+    );
+
+    expect(result.exitCode).toBe(2);
+  });
+
+  it('exits 0 with --fail-on-partial-build when nothing is missing', async () => {
+    const buildDir = await seedBuildDir(tmpRoot, '20991231-235959');
+
+    const result = await runUpload(
+      [
+        '--build-dir',
+        buildDir,
+        '--server-url',
+        'http://localhost:3100',
+        '--fail-on-partial-build',
+      ],
+      {},
+      { log: vi.fn(), error: vi.fn() },
+    );
+
+    expect(result.exitCode).toBe(0);
+  });
+});

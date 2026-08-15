@@ -14,6 +14,16 @@ export const DEFAULT_VIEWPORT = { width: 1280, height: 720 };
  */
 export const MANIFEST_FRAGMENT_DIR = 'manifest-fragments';
 
+/**
+ * Fragment file name for one capture. `(fragmentId, seq)` is unique
+ * across browser contexts AND across processes sharing a build dir, so
+ * no two writers ever target the same path — that is what makes the
+ * fragment set append-only. Shared by both capture paths so they agree
+ * by construction. See `design/MANIFEST_FRAGMENTS.md`.
+ */
+export const fragmentFileName = (fragmentId: string, seq: number): string =>
+  `${fragmentId}-${String(seq).padStart(5, '0')}.json`;
+
 export const generateBuildId = (date: Date = new Date()): string => {
   const pad = (num: number): string => String(num).padStart(2, '0');
   const year = date.getFullYear();

@@ -30,12 +30,14 @@ import path from 'node:path';
 import type {
   QlipManifest,
   QlipManifestEntry,
+  QlipManifestFragment,
   QlipResolvedDefaults,
 } from '../types.js';
 import {
   MANIFEST_FRAGMENT_DIR,
   TOOL_NAME,
   createManifest,
+  fragmentFileName,
 } from '../fs/output.js';
 
 const STORE_KEY = Symbol.for('@qoretechnologies/qlip/__test_runner_store__');
@@ -54,16 +56,18 @@ export interface IQlipTestRunnerStore {
   /** ms-since-epoch at first capture, for `durationMs`. */
   startedAt: number;
   /**
-   * Per-process fragment ID. Each Jest worker / test-runner shard
-   * gets its own fragment file under `manifest-fragments/`. Lines
-   * up with the Vitest plugin path's fragment-per-browser-context
-   * model so `mergeManifestFragments()` (in `src/upload/manifest.ts`)
-   * works identically across both capture paths.
+   * Per-process fragment ID, prefixing every fragment file this
+   * process writes under `manifest-fragments/`. Lines up with the
+   * Vitest plugin path's model so `mergeManifestFragments()` (in
+   * `src/upload/manifest.ts`) works identically across both capture
+   * paths.
    *
    * Random + timestamp keeps it unique across parallel workers
    * without coordination.
    */
   fragmentId: string;
+  /** Captures written so far; see `QlipRuntimeState.fragmentSeq`. */
+  fragmentSeq: number;
 }
 
 interface StoreHolder {
@@ -107,32 +111,41 @@ export const getOrInitStore = (init: {
     counters: new Map(),
     startedAt: Date.now(),
     fragmentId,
+    fragmentSeq: 0,
   };
   holder()[STORE_KEY] = store;
   return store;
 };
 
 /**
- * Write the current store's full manifest to its fragment file on
- * disk. Called after every capture so the qlip-upload CLI (a
- * separate process) can read the latest state at end-of-run.
+ * Write one capture's fragment to disk. Called after every capture so
+ * the qlip-upload CLI (a separate process) sees it even if the run is
+ * interrupted.
  *
- * Cheap: ~5 KB JSON written per capture, well within macOS/Linux
- * filesystem cache. We overwrite each call rather than appending —
- * the file's contents always reflect THIS process's full
- * accumulated manifest.
+ * Append-only, matching the Vitest path: a fragment file is named for
+ * `(fragmentId, seq)` and therefore written exactly once, so no two
+ * captures — in this process or any other sharing the build dir — can
+ * clobber each other. See `design/MANIFEST_FRAGMENTS.md`.
  */
-export const flushFragmentToDisk = async (
+export const writeEntryFragment = async (
   store: IQlipTestRunnerStore,
+  entry: QlipManifestEntry,
 ): Promise<void> => {
-  const fragmentPath = path.join(
-    store.buildDir,
-    MANIFEST_FRAGMENT_DIR,
-    `${store.fragmentId}.json`,
-  );
+  store.fragmentSeq += 1;
+  const seq = store.fragmentSeq;
+  const fragment: QlipManifestFragment = {
+    ...store.manifest,
+    entries: [entry],
+    fragmentId: store.fragmentId,
+    fragmentSeq: seq,
+  };
   await fs.writeFile(
-    fragmentPath,
-    JSON.stringify(store.manifest, null, 2),
+    path.join(
+      store.buildDir,
+      MANIFEST_FRAGMENT_DIR,
+      fragmentFileName(store.fragmentId, seq),
+    ),
+    JSON.stringify(fragment, null, 2),
     'utf-8',
   );
 };

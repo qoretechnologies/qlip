@@ -17,11 +17,13 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { qlipCapture } from '../../src/test-runner/index.js';
 import { peekStore, resetStore } from '../../src/test-runner/manifest-store.js';
+import { MANIFEST_FRAGMENT_DIR } from '../../src/fs/output.js';
+import type { QlipManifestFragment } from '../../src/types.js';
 import type { QlipParameters } from '../../src/types.js';
 
 interface RecordedEvaluate {
@@ -281,5 +283,38 @@ describe('qlipCapture (process-wide state)', () => {
     const page = makeStubPage();
     await qlipCapture(page, { id: 'sharded--story' });
     expect(peekStore()?.buildId).toBe('20990101-000000');
+  });
+
+  it('writes one fragment file per capture, never rewriting one', async () => {
+    // Same append-only contract as the Vitest path (issues #25/#26):
+    // sharded runners share a build dir, so no writer may ever revisit
+    // a file another writer might also be holding.
+    const page = makeStubPage();
+    await qlipCapture(page, { id: 'first--story' });
+    await qlipCapture(page, { id: 'second--story' });
+
+    const store = peekStore();
+    const fragmentsDir = path.join(
+      store?.buildDir ?? '',
+      MANIFEST_FRAGMENT_DIR,
+    );
+    const files = (await readdir(fragmentsDir)).sort();
+    expect(files).toHaveLength(2);
+    for (const file of files) {
+      expect(file.startsWith(`${store?.fragmentId ?? ''}-`)).toBe(true);
+    }
+
+    const fragments = await Promise.all(
+      files.map(async (file) =>
+        JSON.parse(
+          await readFile(path.join(fragmentsDir, file), 'utf-8'),
+        ) as QlipManifestFragment,
+      ),
+    );
+    expect(fragments.map((f) => f.entries.map((e) => e.storyId))).toEqual([
+      ['first--story'],
+      ['second--story'],
+    ]);
+    expect(fragments.map((f) => f.fragmentSeq)).toEqual([1, 2]);
   });
 });
