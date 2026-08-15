@@ -28,6 +28,7 @@ import {
 } from './autodetect.js';
 import {
   buildCaptureReport,
+  describeBaselineCollisions,
   describeCollisions,
   describeMissingCaptures,
   describePartialBuild,
@@ -114,6 +115,11 @@ export const finalizeBuild = async (
   if (collisions) {
     // eslint-disable-next-line no-console
     console.warn(`[qlip] ${collisions}`);
+  }
+  const baselineCollisions = describeBaselineCollisions(report);
+  if (baselineCollisions) {
+    // eslint-disable-next-line no-console
+    console.warn(`[qlip] ${baselineCollisions}`);
   }
   // Suppressed when auto capture is off by default: every story would
   // then be "missing" by design. Per-story overrides stay invisible

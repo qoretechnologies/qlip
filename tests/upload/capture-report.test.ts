@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   CAPTURE_REPORT_FILE,
   buildCaptureReport,
+  describeBaselineCollisions,
   describeCollisions,
   describeMissingCaptures,
   describePartialBuild,
@@ -312,6 +313,97 @@ describe('buildCaptureReport', () => {
     expect(report.storyTestsExecuted).toBeNull();
     expect(report.missingStoryIds).toEqual([]);
     expect(describeMissingCaptures(report)).toBeNull();
+  });
+
+  it('reports captures that will share a baseline on the server', async () => {
+    // qlip-server keys snapshots by (story, screenshotName) but
+    // baselines by (story, viewport) — so a story's auto capture and
+    // its screenshot() captures are separate rows sharing one baseline
+    // image. Accepting one sets the baseline for all of them.
+    const report = await buildCaptureReport(
+      buildDir,
+      mergeResult([
+        entry('page--flow'),
+        entry('page--flow', {
+          kind: 'manual',
+          screenshotName: 'step-1',
+          path: 'stories/manual/page--flow--step-1.png',
+        }),
+        entry('page--flow', {
+          kind: 'manual',
+          screenshotName: 'step-2',
+          path: 'stories/manual/page--flow--step-2.png',
+        }),
+        entry('quiet--story'),
+      ]),
+    );
+
+    expect(report.baselineCollisions).toEqual([
+      {
+        storyId: 'page--flow',
+        viewportKey: '1280x720',
+        screenshotNames: ['auto', 'step-1', 'step-2'],
+      },
+    ]);
+    const message = describeBaselineCollisions(report);
+    expect(message).toContain('3 captures across 1 story');
+    expect(message).toContain('page--flow @1280x720');
+  });
+
+  it('does not count captures at different viewports as sharing a baseline', async () => {
+    // The viewport IS part of the server's baseline key, so a story
+    // captured at two sizes legitimately has two baselines.
+    const report = await buildCaptureReport(
+      buildDir,
+      mergeResult([
+        entry('page--flow'),
+        entry('page--flow', {
+          kind: 'manual',
+          screenshotName: 'mobile',
+          path: 'stories/manual/page--flow--mobile.png',
+          viewport: { width: 390, height: 844 },
+        }),
+      ]),
+    );
+
+    expect(report.baselineCollisions).toEqual([]);
+    expect(describeBaselineCollisions(report)).toBeNull();
+  });
+
+  it('ignores error captures, which the server never diffs', async () => {
+    // Error snapshots skip baseline lookup entirely (design/UPLOAD.md),
+    // so they never compete for one.
+    const report = await buildCaptureReport(
+      buildDir,
+      mergeResult([
+        entry('flaky--story'),
+        entry('flaky--story', {
+          kind: 'error',
+          screenshotName: 'qlip-auto-error-capture',
+          path: 'stories/error/flaky--story--qlip-auto-error-capture.png',
+        }),
+      ]),
+    );
+
+    expect(report.baselineCollisions).toEqual([]);
+    expect(describeBaselineCollisions(report)).toBeNull();
+  });
+
+  it('ignores skipped captures, which have no image to compare', async () => {
+    const report = await buildCaptureReport(
+      buildDir,
+      mergeResult([
+        entry('page--flow'),
+        entry('page--flow', {
+          kind: 'manual',
+          screenshotName: 'step-1',
+          path: 'stories/manual/page--flow--step-1.png',
+          status: 'skipped',
+        }),
+      ]),
+    );
+
+    expect(report.baselineCollisions).toEqual([]);
   });
 
   it('writes the report next to the manifest', async () => {

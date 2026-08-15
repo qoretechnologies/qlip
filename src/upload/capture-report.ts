@@ -28,6 +28,31 @@ import type { ISnapshotIdCollision, MergeResult } from './manifest.js';
 
 export const CAPTURE_REPORT_FILE = 'capture-report.json';
 
+/**
+ * Two captures of one story that qlip-server resolves to the SAME
+ * baseline, because it keys baselines on `(projectId, storyId,
+ * viewportKey)` — no screenshot name — while keying snapshots on
+ * `(buildId, storyId, screenshotName)`. The two identities disagree,
+ * so a story's auto capture and its `screenshot()` captures at the
+ * same viewport are separate snapshots that share one baseline image:
+ * accepting one sets the baseline for all of them, and the others
+ * diff against a picture of something else.
+ *
+ * Distinct from `ISnapshotIdCollision`, which is two captures the
+ * server stores as one ROW. This is two rows sharing one BASELINE.
+ *
+ * qlip cannot fix this from the client — the index lives in
+ * qlip-server — so it reports it rather than shipping meaningless
+ * diffs in silence.
+ */
+export interface IBaselineCollision {
+  storyId: string;
+  /** `<width>x<height>`, the server's baseline discriminator. */
+  viewportKey: string;
+  /** Screenshot names competing for that baseline, in capture order. */
+  screenshotNames: string[];
+}
+
 const SCREENSHOT_ROOT = 'stories';
 
 export interface IQlipCaptureReport {
@@ -62,6 +87,12 @@ export interface IQlipCaptureReport {
    * of the two `screenshot()` calls.
    */
   collisions: ISnapshotIdCollision[];
+  /**
+   * Captures that will share a baseline server-side. See
+   * `IBaselineCollision` — a qlip-server limitation, reported so the
+   * diffs it produces are not mistaken for real visual change.
+   */
+  baselineCollisions: IBaselineCollision[];
   /**
    * Story tests Vitest reported running, or `null` when no census was
    * collected. `null` means UNKNOWN, never zero — see
@@ -109,6 +140,37 @@ const countBy = <T extends string>(values: T[]): Record<string, number> => {
     counts[value] = (counts[value] ?? 0) + 1;
   }
   return counts;
+};
+
+/**
+ * Group captured entries by the identity qlip-server gives a BASELINE:
+ * `(storyId, viewportKey)`. Any group with more than one member will
+ * share a single baseline image on the server.
+ *
+ * `error` captures are excluded: the server skips baseline lookup and
+ * diffing for them entirely (see `design/UPLOAD.md`), so they never
+ * compete. Non-captured entries have no image and cannot either.
+ */
+const findBaselineCollisions = (
+  manifest: QlipManifest,
+): IBaselineCollision[] => {
+  const groups = new Map<string, IBaselineCollision>();
+  for (const entry of manifest.entries) {
+    if (entry.status !== 'captured' || entry.kind === 'error') continue;
+    const viewportKey = `${String(entry.viewport.width)}x${String(entry.viewport.height)}`;
+    const key = `${entry.storyId}::${viewportKey}`;
+    const group = groups.get(key);
+    if (group) {
+      group.screenshotNames.push(entry.screenshotName);
+    } else {
+      groups.set(key, {
+        storyId: entry.storyId,
+        viewportKey,
+        screenshotNames: [entry.screenshotName],
+      });
+    }
+  }
+  return [...groups.values()].filter((g) => g.screenshotNames.length > 1);
 };
 
 /**
@@ -187,6 +249,7 @@ export const buildCaptureReport = async (
       .sort(),
     retractedScreenshots: onDisk.filter((file) => retracted.has(file)).sort(),
     collisions: merged.collisions,
+    baselineCollisions: findBaselineCollisions(manifest),
     ...diffCensus(manifest, census),
   };
 };
@@ -200,6 +263,33 @@ export const writeCaptureReport = async (
     JSON.stringify(report, null, 2),
     'utf-8',
   );
+};
+
+/**
+ * One-line human summary of captures that will share a baseline, or
+ * `null` when none do.
+ *
+ * Reported once per build rather than per story: it is one upstream
+ * limitation, not N defects, and a per-story warning would fire for
+ * every story that takes a `screenshot()` — the exact crying-wolf that
+ * makes a warning worth ignoring.
+ */
+export const describeBaselineCollisions = (
+  report: IQlipCaptureReport,
+  exampleCount = 3,
+): string | null => {
+  const { baselineCollisions: groups } = report;
+  if (groups.length === 0) return null;
+  const captures = groups.reduce((n, g) => n + g.screenshotNames.length, 0);
+  const examples = groups
+    .slice(0, exampleCount)
+    .map((g) => `${g.storyId} @${g.viewportKey} (${g.screenshotNames.join(', ')})`)
+    .join('; ');
+  const more =
+    groups.length > exampleCount
+      ? `; +${String(groups.length - exampleCount)} more`
+      : '';
+  return `${String(captures)} captures across ${String(groups.length)} stor${groups.length === 1 ? 'y' : 'ies'} will share a baseline on the server, which keys baselines by (story, viewport) and not by screenshot name — their diffs are not meaningful until that is fixed server-side. Affected: ${examples}${more}.`;
 };
 
 /**

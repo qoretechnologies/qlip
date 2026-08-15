@@ -321,11 +321,14 @@ check is worse than nothing:
   than dropped silently.
 - **qlip-server: snapshot identity and baseline identity disagree.**
   Baselines are unique on `(projectId, storyId, viewportKey)` — no
-  `screenshotName` — so every capture of a story at one viewport shares
-  a baseline. That already affects auto-vs-manual, but keeping the
-  captures the old key dropped increases the number of competitors.
-  Needs an issue in `qlip-server` (index + baseline filename +
-  migration).
+  `screenshotName` — so every non-error capture of a story at one
+  viewport shares a baseline. That already affects auto-vs-manual, but
+  keeping the captures the old key dropped increases the number of
+  competitors. **The real fix is server-side** (index + baseline
+  filename + migration) and still needs an issue in `qlip-server`.
+  Mitigated here in the only way a client can: the audit reports the
+  affected captures once per build (`baselineCollisions`) so their
+  meaningless diffs are not read as visual change.
 - Why a context is shared at all — the consumer's `isolate` setting,
   deliberate.
 - `capture.log` in the repo root is a stray file from an unrelated

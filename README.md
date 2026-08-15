@@ -182,6 +182,8 @@ export const LoggedIn = {
 
 Take as many as you like per story — each name is its own snapshot on the server. Give them distinct names: two captures of one story sharing a name (including `auto`, which the automatic capture uses) resolve to one snapshot, and the run warns which image it had to drop.
 
+**Known limitation:** qlip-server currently keys *baselines* by story and viewport, without the screenshot name, so a story's auto capture and its manual captures at the same viewport share one baseline image — accepting one sets the baseline for all of them and the others show meaningless diffs. The run warns when a build contains such captures. Fixing it needs a server-side change; until then, prefer a distinct viewport per manual capture if you need independent baselines.
+
 ## Parameters
 
 Configure screenshots per story via `parameters.qlip`:

@@ -155,6 +155,27 @@ there is a missing visit, not a missing capture.
 `diagnostics: true` on the plugin (or `$QLIP_DEBUG=1`) additionally
 logs one line per capture with the story, path, context and sequence.
 
+### Two identities that disagree, and what qlip can do about it
+
+qlip-server keys a **snapshot** on `(buildId, storyId, screenshotName)`
+but a **baseline** on `(projectId, storyId, viewportKey)` — no
+screenshot name. So a story's auto capture and its `screenshot()`
+captures at one viewport are separate snapshot rows that resolve to a
+single baseline image: accepting one sets the baseline for all of them,
+and the rest diff against a picture of something else. `error` captures
+are exempt — the server skips baseline lookup for them.
+
+The index is server-side, so the client cannot fix it. What it can do
+is refuse to be silent: the audit groups captured non-error entries by
+`(storyId, viewportKey)` and reports any group larger than one, once
+per build. Until qlip-server keys baselines by screenshot name too,
+those diffs mean nothing and should not be read as visual change.
+
+Note the two collision reports are different things and both exist:
+`collisions` is two captures the server stores as one ROW (fix by
+renaming one); `baselineCollisions` is two rows sharing one BASELINE
+(nothing to fix client-side).
+
 ## How to extend
 
 - **Adding a field to a fragment**: add it to `QlipManifestFragment` as
