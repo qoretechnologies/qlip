@@ -325,7 +325,10 @@ check is worse than nothing:
   viewport shares a baseline. That already affects auto-vs-manual, but
   keeping the captures the old key dropped increases the number of
   competitors. **The real fix is server-side** (index + baseline
-  filename + migration) and still needs an issue in `qlip-server`.
+  filename + migration) and still needs an issue in `qlip-server`; the
+  corrected contract — both identities, the required change, and the
+  migration — is now specified in `design/UPLOAD.md`
+  ("Snapshot and baseline identity"), which is the doc both repos cite.
   Mitigated here in the only way a client can: the audit reports the
   affected captures once per build (`baselineCollisions`) so their
   meaningless diffs are not read as visual change.
