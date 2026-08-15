@@ -143,9 +143,11 @@ today only the PNG cleanup is best-effort.
 - [x] `src/upload/manifest.ts` — read fragments with bounded
       concurrency (~64 at a time); sort by
       `(createdAt, fragmentId, fragmentSeq)` with a filename fallback
-      for legacy fragments; apply tombstones; keep last-wins dedupe by
-      `(storyId, kind)`; widen `MergeResult` with `contextCount` and
-      `entryCount`.
+      for legacy fragments; apply tombstones; keep last-wins dedupe —
+      re-keyed onto the server's snapshot identity while implementing
+      this, see §5; widen `MergeResult` with `contextCount`,
+      `entriesByContext`, `retractedCount`, `retractedPaths` and
+      `collisions`.
 - [x] `src/upload/finalize.ts` — log entries + contexts rather than a
       raw fragment count (a "fragment" is no longer a context), and log
       a one-line build summary even when upload is disabled (today a
@@ -304,12 +306,26 @@ check is worse than nothing:
 
 ## 5. Out of scope / follow-ups
 
-- **`(storyId, kind)` dedupe collapses multiple manual screenshots per
-  story** ([src/upload/manifest.ts:45-53](../src/upload/manifest.ts#L45-L53)):
-  a story taking three `screenshot()` shots keeps only the last, which
-  matches the server's `(buildId, storyId, kind)` primary key. Pre-
-  existing, unrelated to this race, but worth its own issue — the
-  screenshot name is dropped from the identity on both sides.
+- ~~**`(storyId, kind)` dedupe collapses multiple manual screenshots
+  per story**~~ — **fixed in this branch instead of deferred.** The
+  premise was wrong: qlip-server does not key snapshots on `kind`, it
+  derives the primary key as
+  `${buildId}-${storyId}-${screenshotName}`
+  (`qlip-server/src/utils/transforms.ts`, matching the `snapshots.id`
+  contract in its schema). So the old key was wrong in both directions
+  — it dropped a story's 2nd and 3rd `screenshot()` calls and every
+  error capture after the first on a retried story, while still letting
+  a manual `screenshot(ctx, 'auto')` collide with the auto capture and
+  take the build down on `snapshots_pkey`. Now keyed on
+  `(storyId, screenshotName)`, with genuine collisions reported rather
+  than dropped silently.
+- **qlip-server: snapshot identity and baseline identity disagree.**
+  Baselines are unique on `(projectId, storyId, viewportKey)` — no
+  `screenshotName` — so every capture of a story at one viewport shares
+  a baseline. That already affects auto-vs-manual, but keeping the
+  captures the old key dropped increases the number of competitors.
+  Needs an issue in `qlip-server` (index + baseline filename +
+  migration).
 - Why a context is shared at all — the consumer's `isolate` setting,
   deliberate.
 - `capture.log` in the repo root is a stray file from an unrelated

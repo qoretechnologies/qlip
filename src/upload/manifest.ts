@@ -241,7 +241,8 @@ export const mergeManifestFragments = async (
   // already QlipManifestFragment rather than `| undefined`.
   const skeleton = fragments[0].fragment;
   // Concatenate all fragment entries in capture order, then dedupe by
-  // (storyId, kind). The deterministic sort + last-wins semantics keep
+  // the server's snapshot identity, `(storyId, screenshotName)` — see
+  // dedupeEntries. The deterministic sort + last-wins semantics keep
   // the SECOND/LATEST capture of each story when vite-reopt or the
   // addon-vitest re-runs a file mid-build.
   const allEntries: QlipManifestEntry[] = [];
