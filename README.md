@@ -180,6 +180,10 @@ export const LoggedIn = {
 };
 ```
 
+Take as many as you like per story — each name is its own snapshot on the server. Give them distinct names: two captures of one story sharing a name (including `auto`, which the automatic capture uses) resolve to one snapshot, and the run warns which image it had to drop.
+
+**Known limitation:** qlip-server keys *baselines* by story, kind and viewport, without the screenshot name. A story's auto capture and its manual captures are therefore independent, but **two manual captures of one story at one viewport share a baseline** — accepting one sets the baseline for the other, which then shows a meaningless diff. The run warns when a build contains such captures. Fixing it needs a server-side change; until then, give such captures distinct viewports if you need independent baselines.
+
 ## Parameters
 
 Configure screenshots per story via `parameters.qlip`:
@@ -219,12 +223,17 @@ qlipVitestPlugin({
   waitForIdleMs: 300,
   maxWaitForIdleMs: 2000,
   ignoreElements: [],
+  diagnostics: false,
 });
 ```
 
 `waitForIdleMs` waits for DOM mutations to settle before taking a screenshot. This is especially useful for animation libraries like `react-spring` that update inline styles via `requestAnimationFrame`, which bypasses CSS-based animation disabling. Increase it if you still catch mid-transition frames, or lower it for faster runs when your UI is static. `maxWaitForIdleMs` caps the wait so stories with continuously changing UI still complete.
 
 `ignoreElements` lets you provide CSS selectors to mask before capture. Qlip draws solid overlays on matching elements so layout stays intact while visual diffs ignore those regions.
+
+qlip also reports what it *failed* to capture: the run warns when Storybook stories executed without producing a capture, naming them and the files they came from. It is advisory — a story that sets `parameters.qlip.auto = false` shows up there too.
+
+`diagnostics` (or `QLIP_DEBUG=1`) logs one line per capture — story, kind, path, and which browser context wrote it. Turn it on when a CI build captured fewer stories than it ran; the always-written `capture-report.json` covers the same ground after the fact.
 
 ## Memory-safe config for large Storybooks
 
@@ -265,11 +274,27 @@ Verified on a real consumer (qorus-ide, 90 story files / 643 tests, Vitest 2.1.9
       auto/<storyTitle>--<storyName>.png
       manual/<storyTitle>--<storyName>--<screenshotName>.png
       error/<storyTitle>--<storyName>--qlip-auto-error-capture.png
+    manifest-fragments/<contextId>-<seq>.json
     manifest.json
+    capture-report.json
 ```
 
 - `buildId` defaults to `YYYYMMDD-HHmmss`
 - `parameters.qlip.skip === true` disables all captures for that story
+- `manifest-fragments/` holds one append-only record per capture; they
+  merge into `manifest.json` at end-of-run. Safe to delete after a
+  build uploads — see [`design/MANIFEST_FRAGMENTS.md`](./design/MANIFEST_FRAGMENTS.md)
+- `capture-report.json` is the run's audit: captures per context and
+  per story file, plus any screenshot on disk that no manifest entry
+  references
+
+## Sharded CI runs
+
+Several `vitest run` invocations (or `test-storybook` shards) can capture into one build: pin `buildId` — e.g. `buildId: process.env.GITHUB_RUN_ID` — so every shard writes into the same `<outputDir>/<buildId>/`, then upload once at the end with `npx qlip-upload --build-dir ./qlip/screenshots/$GITHUB_RUN_ID`. Fragment names carry a per-process id, so shards cannot overwrite each other's captures.
+
+`isolate: false` is supported. Several story files then share one browser context and capture concurrently; fragments are append-only precisely so that is safe.
+
+Add `--fail-on-partial-build` to `qlip-upload` (or `upload.failOnPartialBuild` on the plugin) to turn "screenshots on disk that never reached the manifest" from a warning into a red build.
 
 ## Manifest
 

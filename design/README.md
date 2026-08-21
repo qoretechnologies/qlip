@@ -18,6 +18,10 @@ hasn't been written yet, not that it's been ruled out.
   precedence rules.
 - **MANIFEST.md** — the manifest schema this tool emits, including
   the JSON shape and file layout.
+- **MANIFEST_FRAGMENTS.md** ✓ — how a browser-side capture becomes a
+  line in `manifest.json`: the append-only fragment-per-capture
+  contract both capture paths write, tombstones, the merge, and the
+  post-merge audit that makes a partial build impossible to miss.
 - **UPLOAD.md** ✓ — the qlip-side of the cross-repo upload contract
   with qlip-server. Multipart wire format, the field-name encoding
   for screenshot paths, branch/commit auto-detection, and a

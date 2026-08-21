@@ -104,6 +104,13 @@ export interface QlipUploadOptions {
    * Set to `true` in CI when you want red builds on upload errors.
    */
   failOnUploadError?: boolean;
+  /**
+   * Whether a partial build should fail the run. A build is partial
+   * when PNGs exist on disk that no manifest entry references — i.e.
+   * captures whose manifest record was lost. Default: `false` (warn
+   * only). See `design/MANIFEST_FRAGMENTS.md`.
+   */
+  failOnPartialBuild?: boolean;
 }
 
 export interface QlipPluginOptions extends QlipCaptureOptions {
@@ -115,6 +122,13 @@ export interface QlipPluginOptions extends QlipCaptureOptions {
    * happens — the screenshots stay on local disk.
    */
   upload?: QlipUploadOptions;
+  /**
+   * Log one line per capture (story, kind, path, context + sequence)
+   * and keep it in the build's `capture-report.json`. Off by default;
+   * `$QLIP_DEBUG=1` turns it on without touching config. Use it when a
+   * CI build captured fewer stories than it ran.
+   */
+  diagnostics?: boolean;
 }
 
 export type QlipResolvedDefaults = Required<QlipCaptureOptions> & {
@@ -128,6 +142,8 @@ export interface QlipRuntimeConfig {
   buildDir: string;
   defaults: QlipResolvedDefaults;
   tool: { name: string; version: string };
+  /** See `QlipPluginOptions.diagnostics`. */
+  diagnostics?: boolean;
 }
 
 export interface QlipScreenshotOptions extends QlipCaptureOptions {
@@ -253,4 +269,37 @@ export interface QlipManifest {
     durationMs: number;
   };
   entries: QlipManifestEntry[];
+}
+
+/**
+ * Marks every entry for `(storyId, kind)` as stale, whatever order the
+ * fragments merge in. Written by the retry-mask prune when a story
+ * passes on a later attempt: the error captures from the failed
+ * attempts are no longer real failures. Order-independent by design —
+ * "this story ultimately passed" is true regardless of when the
+ * tombstone lands relative to the entries it retracts.
+ */
+export interface QlipManifestTombstone {
+  storyId: string;
+  kind: QlipEntryKind;
+}
+
+/**
+ * One capture's on-disk record under `<buildDir>/manifest-fragments/`.
+ *
+ * Fragments are append-only: one file per capture, written exactly
+ * once and never rewritten, so concurrent captures — in one context,
+ * across contexts, or across processes sharing a `--build-dir` —
+ * cannot clobber each other. `entries` therefore holds a single entry
+ * (or none, for a tombstone-only fragment), but the merger accepts any
+ * count so fragments written by older qlip versions still merge.
+ *
+ * See `design/MANIFEST_FRAGMENTS.md`.
+ */
+export interface QlipManifestFragment extends QlipManifest {
+  /** Identifies the writing browser context / process. */
+  fragmentId?: string;
+  /** Per-context capture counter; orders entries within a context. */
+  fragmentSeq?: number;
+  tombstones?: QlipManifestTombstone[];
 }

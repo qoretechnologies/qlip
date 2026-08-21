@@ -26,8 +26,40 @@ import {
   autodetectCommit,
   autodetectPullRequestUrl,
 } from './autodetect.js';
+import {
+  buildCaptureReport,
+  describeBaselineCollisions,
+  describeCollisions,
+  describeMissingCaptures,
+  describePartialBuild,
+  writeCaptureReport,
+} from './capture-report.js';
 import { mergeManifestFragments } from './manifest.js';
+import type { MergeResult } from './manifest.js';
 import { QlipUploadError, uploadBuild, resolveServerUrl } from './upload.js';
+
+/**
+ * Thrown when a build is partial and the caller opted into
+ * `failOnPartialBuild`. Distinct from `QlipUploadError` — the upload
+ * may have been fine; the *capture* was not.
+ */
+export class QlipPartialBuildError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'QlipPartialBuildError';
+  }
+}
+
+/**
+ * Entry + context counts rather than a raw fragment count: a fragment
+ * is now one capture, so "142 fragments" no longer says how many
+ * contexts ran — and the context count is exactly what tells you
+ * whether `isolate: false` is packing many story files into one.
+ */
+const summarizeBuild = (merged: MergeResult, buildId?: string): string => {
+  const { stats } = merged.manifest;
+  return `build ${buildId ?? merged.manifest.buildId}: ${String(merged.manifest.entries.length)} entries from ${String(merged.contextCount)} context${merged.contextCount === 1 ? '' : 's'} (${String(stats.capturedAuto)} auto, ${String(stats.capturedManual)} manual, ${String(stats.failed)} failed, ${String(stats.skipped)} skipped)`;
+};
 
 const FINALIZE_FLAG = Symbol.for('@qoretechnologies/qlip/__finalized__');
 
@@ -60,8 +92,8 @@ export const finalizeBuild = async (
   markFinalized();
 
   // Step 1: always merge fragments. Without this, manifest.json
-  // contains only entries from the last test file (each browser
-  // context writes its own fragment; this consolidates them).
+  // contains only entries from the last test file (each capture writes
+  // its own fragment; this consolidates them).
   const merged = await mergeManifestFragments(opts.runtime.buildDir);
   if (!merged) {
     // No fragments → no captures happened. Probably a misconfigured
@@ -70,8 +102,53 @@ export const finalizeBuild = async (
     return;
   }
 
-  // Step 2: optional upload.
-  if (!opts.upload || opts.upload.disabled === true) return;
+  // Step 2: audit what landed. A build that lost captures used to be
+  // indistinguishable from a smaller suite; now it says so.
+  const report = await buildCaptureReport(opts.runtime.buildDir, merged);
+  await writeCaptureReport(opts.runtime.buildDir, report);
+  const partial = describePartialBuild(report);
+  if (partial) {
+    // eslint-disable-next-line no-console
+    console.warn(`[qlip] ${partial}`);
+  }
+  const collisions = describeCollisions(report);
+  if (collisions) {
+    // eslint-disable-next-line no-console
+    console.warn(`[qlip] ${collisions}`);
+  }
+  const baselineCollisions = describeBaselineCollisions(report);
+  if (baselineCollisions) {
+    // eslint-disable-next-line no-console
+    console.warn(`[qlip] ${baselineCollisions}`);
+  }
+  // Suppressed when auto capture is off by default: every story would
+  // then be "missing" by design. Per-story overrides stay invisible
+  // from here, which is why this warns and never fails a build.
+  if (opts.runtime.defaults?.auto !== false) {
+    const missing = describeMissingCaptures(report);
+    if (missing) {
+      // eslint-disable-next-line no-console
+      console.warn(`[qlip] ${missing}`);
+    }
+  }
+
+  // A partial build still uploads: seeing which stories DID capture is
+  // how you diagnose one. The opt-in failure is raised at the end, so
+  // it never costs the user the evidence.
+  const partialError =
+    partial && opts.upload?.failOnPartialBuild === true
+      ? new QlipPartialBuildError(partial)
+      : null;
+
+  // Step 3: optional upload.
+  if (!opts.upload || opts.upload.disabled === true) {
+    // Without an upload there is no other end-of-run line, so a local
+    // run would otherwise finish with no indication of what it caught.
+    // eslint-disable-next-line no-console
+    console.log(`[qlip] ${summarizeBuild(merged)} → ${opts.runtime.buildDir}`);
+    if (partialError) throw partialError;
+    return;
+  }
 
   const branch = opts.upload.branch ?? autodetectBranch();
   const commit = opts.upload.commit ?? autodetectCommit();
@@ -101,7 +178,7 @@ export const finalizeBuild = async (
         : `${String(merged.manifest.entries.length)} entries, legacy protocol`;
     // eslint-disable-next-line no-console
     console.log(
-      `[qlip] uploaded build ${result.buildId} (${String(merged.fragmentCount)} fragment${merged.fragmentCount === 1 ? '' : 's'}, ${detail}) → ${resolveServerUrl(resolved)}`,
+      `[qlip] uploaded ${summarizeBuild(merged, result.buildId)}, ${detail} → ${resolveServerUrl(resolved)}`,
     );
   } catch (err) {
     const message =
@@ -114,4 +191,6 @@ export const finalizeBuild = async (
     console.error(`[qlip] upload failed: ${message}`);
     if (opts.upload.failOnUploadError === true) throw err;
   }
+
+  if (partialError) throw partialError;
 };

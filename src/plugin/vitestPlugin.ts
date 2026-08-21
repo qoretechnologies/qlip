@@ -62,6 +62,8 @@ export const qlipVitestPlugin = (options: QlipPluginOptions = {}): Plugin => {
           consoleLogExcludePatterns: options.consoleLogExcludePatterns ?? [],
         },
         tool: { name: TOOL_NAME, version },
+        // Read here, in Node, because the browser runtime has no env.
+        diagnostics: options.diagnostics ?? process.env['QLIP_DEBUG'] === '1',
       };
 
       const setupTs = fileURLToPath(

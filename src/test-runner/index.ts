@@ -63,7 +63,7 @@ import type {
   QlipViewport,
 } from '../types.js';
 import {
-  flushFragmentToDisk,
+  writeEntryFragment,
   getOrInitStore,
   nextStepName,
   peekStore,
@@ -368,7 +368,7 @@ const qlipCaptureInner = async (
       timingsMs: Date.now() - captureStart,
     });
     pushEntry(store, entry);
-    await flushFragmentToDisk(store);
+    await writeEntryFragment(store, entry);
     return entry;
   }
 
@@ -426,7 +426,7 @@ const qlipCaptureInner = async (
   pushEntry(store, entry);
   // Persist after every capture so the separate qlip-upload process
   // sees the latest state even if the test run is interrupted.
-  await flushFragmentToDisk(store);
+  await writeEntryFragment(store, entry);
   return entry;
 };
 

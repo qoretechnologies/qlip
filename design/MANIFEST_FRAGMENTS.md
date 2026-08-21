@@ -1,0 +1,192 @@
+# qlip — manifest fragments (the on-disk capture record)
+
+How a browser-side capture becomes a line in `manifest.json`. This is
+the contract both capture paths write and the uploader reads; change it
+only together with `src/upload/manifest.ts`.
+
+---
+
+## The problem
+
+Captures happen in the browser, one per story, and the manifest they
+belong to lives in Node. Three things run at once and none of them can
+be coordinated from qlip's side:
+
+1. **Several stories capture concurrently inside one browser context.**
+   Under `isolate: false` — the standard configuration for a large
+   suite, because isolation costs ~20s per file re-evaluating the
+   bundle — Vitest runs several `*.stories.tsx` files in one context,
+   sharing one `globalThis` and therefore one `QlipRuntimeState`. Their
+   `afterEach` hooks overlap.
+2. **Several contexts run in parallel**, each with its own state.
+3. **Several processes may share one build directory** — CI that shards
+   a suite across `vitest run` invocations pinned to one `--build-dir`
+   via `buildId`, uploading once at the end.
+
+## The rule
+
+**One fragment file per capture, written exactly once, never
+rewritten.**
+
+```
+<buildDir>/manifest-fragments/<fragmentId>-<seq>.json
+```
+
+- `fragmentId` — `Date.now()` base36 + 8 random base36 chars, minted
+  once per browser context (`src/runtime/context.ts`) or per
+  test-runner process (`src/test-runner/manifest-store.ts`). Unique
+  across contexts and across processes without coordination.
+- `seq` — a per-context counter, claimed synchronously
+  (`nextFragmentSeq`) so two overlapping captures can never claim the
+  same number.
+
+The pair is unique, so no two writers ever address the same path. That
+is the whole mechanism: there is no lock, no queue, and nothing to keep
+correct as the code grows.
+
+Each file is a `QlipManifestFragment` — a normal `QlipManifest` whose
+`entries` array holds the single capture, plus `fragmentId` /
+`fragmentSeq`. Keeping the manifest shape means the merger needs no
+special case, and fragments written by an older qlip (a whole manifest,
+no id/seq) still merge.
+
+### Why not serialise the writes instead
+
+A promise chain per context also removes the race, and is a smaller
+change. It was rejected because it keeps re-serialising the whole
+manifest per capture: `isolate: false` + `fileParallelism: false` puts
+an entire suite in one context, so a 1700-story run would write ~290 MB
+of JSON to record ~350 KB, and a context that dies still loses whatever
+its last in-flight write held. Append-only is O(1) per capture, safe
+across processes as well as contexts, and leaves a per-capture record
+to diagnose from.
+
+## Deletion: tombstones
+
+Append-only has no rewrite, so removing an entry needs an explicit
+retraction:
+
+```json
+{ "entries": [], "tombstones": [{ "storyId": "x--y", "kind": "error" }] }
+```
+
+The only producer today is the retry-mask prune
+(`captureAutoScreenshot`): when a story passes on a retry, the error
+captures from its failed attempts are no longer real failures. The
+merger drops every matching entry **regardless of merge order** — "this
+story ultimately passed" is true whenever the tombstone lands.
+
+## The merge
+
+`mergeManifestFragments` (`src/upload/manifest.ts`) at end-of-run:
+
+1. Read every `*.json` in the fragments dir, 64 at a time (a ~1700-story
+   run writes ~1700 files; a shared build dir across ~10 CI shards can
+   hold ~17k).
+2. Sort by `(createdAt, fragmentId, fragmentSeq)`, falling back to the
+   file name for pre-append-only fragments. `readdir` order is not
+   deterministic; entry order in `manifest.json` must be.
+3. Drop tombstoned entries.
+4. Dedupe by `(storyId, screenshotName)`, last wins — vite's
+   dep-optimization can re-run a story file mid-build (Storybook
+   #33067) and the second capture is the more accurate one.
+
+   That pair is the identity qlip-server gives a snapshot: its primary
+   key is `${buildId}-${storyId}-${screenshotName}`
+   (`qlip-server/src/utils/transforms.ts`) — `kind` is NOT part of it.
+   Collapsing exactly what the server collapses is what keeps a build
+   from being rejected wholesale on `snapshots_pkey`, and keeps qlip
+   from dropping captures the server would have stored. Two captures
+   that share a name but not an image (a manual `screenshot(ctx,
+   'auto')` next to the story's auto capture) cannot both survive; the
+   run names them so the author can rename one.
+5. Recompute stats from the surviving entries and write
+   `manifest.json`.
+
+Fragments are left in place afterwards — they are small, and re-running
+the merge is a useful escape hatch.
+
+## The audit (why a partial build can no longer be silent)
+
+The race behind issues #25 / #26 survived for weeks because a build
+that lost captures looked exactly like a smaller suite: no error, no
+warning, `failed: 0`. After merging, `finalizeBuild` compares the PNGs
+on disk against the manifest that claims to describe them
+(`src/upload/capture-report.ts`) and:
+
+- writes `<buildDir>/capture-report.json` — entries per context, per
+  story file, per kind/status, retractions, and any orphans;
+- warns when a PNG has no manifest entry and neither a tombstone nor a
+  snapshot-id collision explains it,
+  naming examples. Retracted captures are listed separately, not as
+  orphans: deleting their PNGs is best-effort and no-ops on Vitest
+  versions without a `removeFile` command, and an audit that cries
+  wolf on every retry-flaky run is worse than none;
+- fails the run when `upload.failOnPartialBuild` (CLI:
+  `--fail-on-partial-build`) is set — after uploading, so the evidence
+  survives.
+
+The check compares two facts on disk rather than trusting either
+producer, so it holds for the Vitest plugin, the test-runner and
+standalone `qlip-upload` alike.
+
+One loss leaves nothing on disk to compare: a story that runs and
+captures nothing at all — no entry, no PNG. Only the test runner
+witnesses that, so `QlipUploadReporter` records the story ids Vitest
+executed (`src/upload/census.ts`, from `meta.storyId`, per module as
+each file finishes) and the audit names the stories that never
+captured. Three rules keep it honest:
+
+- **No census means UNKNOWN, never "everything is missing."** On
+  Vitest 2 in workspace mode the reporter can be lifecycle-dead — the
+  reason `globalSetup` teardown exists — and the census is simply
+  absent. The audit then says nothing.
+- **Only `auto` entries count as proof of capture.** A story test
+  yields exactly one; counting manual or error entries would let an
+  extra capture mask a missing one.
+- **It warns, never fails.** `parameters.qlip.auto = false` on a
+  single story is invisible from the runner's side, so this names
+  names and leaves the judgement to a human.
+
+The census covers the Vitest path only. The test-runner path drives
+stories from a Storybook index it walks itself, so a story missing
+there is a missing visit, not a missing capture.
+
+`diagnostics: true` on the plugin (or `$QLIP_DEBUG=1`) additionally
+logs one line per capture with the story, path, context and sequence.
+
+### Two identities that disagree, and what qlip can do about it
+
+qlip-server keys a **snapshot** on `(buildId, storyId, screenshotName)`
+but a **baseline** on `(projectId, storyId, kind, viewportKey, branch)`
+— no screenshot name. `kind` keeps a story's auto capture separate from
+its `screenshot()` captures, so those do not collide; two captures of
+the same kind do. Accepting one sets the baseline for the other, which
+then diffs against a picture of a different moment. `error` captures are
+exempt — the server skips baseline lookup for them.
+
+Both keys are now written down in
+[`UPLOAD.md`](UPLOAD.md#snapshot-and-baseline-identity-both-sides-must-agree),
+which is the contract both repos cite — the silence there is how they
+came to disagree. The index itself is server-side, so the client cannot
+fix it. What it can do is refuse to be silent: the audit groups captured non-error entries by
+`(storyId, kind, viewportKey)` and reports any group larger than one,
+once per build. Until qlip-server keys baselines by screenshot name too,
+those diffs mean nothing and should not be read as visual change.
+
+Note the two collision reports are different things and both exist:
+`collisions` is two captures the server stores as one ROW (fix by
+renaming one); `baselineCollisions` is two rows sharing one BASELINE
+(nothing to fix client-side).
+
+## How to extend
+
+- **Adding a field to a fragment**: add it to `QlipManifestFragment` as
+  optional and make the merger tolerate its absence — a shared build
+  dir can hold fragments from two qlip versions at once.
+- **Never make a writer revisit a file.** If a future feature needs to
+  amend a capture, express it as a new fragment (a tombstone is the
+  existing example), not as a rewrite.
+- **Keep both capture paths on `fragmentFileName`** (`src/fs/output.ts`)
+  so the Vitest runtime and the test-runner store agree by
+  construction rather than by two matching literals.

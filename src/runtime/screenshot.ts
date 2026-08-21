@@ -19,6 +19,7 @@ import {
   buildAutoScreenshotPath,
   buildManualLogPath,
   buildManualScreenshotPath,
+  fragmentFileName,
   joinPath,
   sanitizeSegment,
 } from '../fs/output.js';
@@ -26,27 +27,38 @@ import {
   flushConsoleLogs,
   initRuntimeState,
   markStorybookWarning,
+  nextFragmentSeq,
   nextStepName,
   pruneStaleErrorEntries,
   pushEntry,
   updateStats,
 } from './context.js';
+import type { QlipRuntimeState } from './context.js';
 import type { TestContext } from 'vitest';
-import type { QlipParameters, QlipManifestEntry } from '../types.js';
+import type {
+  QlipManifestFragment,
+  QlipManifestTombstone,
+  QlipParameters,
+  QlipManifestEntry,
+} from '../types.js';
 
 /**
- * Each browser context writes its in-memory manifest to a unique
- * fragment file under `<buildDir>/manifest-fragments/<fragmentId>.json`.
- * The Node-side `mergeManifestFragments` (in `src/upload/manifest.ts`)
- * consolidates all fragments into the final `manifest.json` once Vitest
- * signals end-of-run. Writing the full manifest each time is fine —
- * fragments are tiny JSON and there's only one writer per file.
+ * Every capture writes ONE fragment file under
+ * `<buildDir>/manifest-fragments/<fragmentId>-<seq>.json`, holding the
+ * entry it just produced. The Node-side `mergeManifestFragments` (in
+ * `src/upload/manifest.ts`) consolidates them into the final
+ * `manifest.json` at end-of-run.
  *
- * Background: vitest browser-mode runs each `*.stories.tsx` in its
- * own browser context with its own module graph and its own
- * QlipRuntimeState. If they all wrote to a shared `manifest.json` the
- * writes would clobber each other — last test file wins, earlier
- * files' entries get stranded on disk.
+ * The file name is unique per capture, so a fragment is written
+ * exactly once and never rewritten. That is what makes concurrent
+ * captures safe: under `isolate: false` several test files share one
+ * browser context (and one QlipRuntimeState), and their `afterEach`
+ * hooks overlap. qlip used to re-serialise the context's whole
+ * manifest on every capture — whichever write landed last won, and it
+ * was not necessarily the one holding the most entries, so up to ~2/3
+ * of a suite's captures were silently dropped (issues #25, #26).
+ *
+ * See `design/MANIFEST_FRAGMENTS.md`.
  */
 type WriteFileCommand = (
   path: string,
@@ -61,15 +73,47 @@ type RemoveFileCommand = (path: string) => Promise<unknown>;
 
 const writeManifestFragment = async (
   commands: { writeFile: WriteFileCommand },
-  buildDir: string,
-  fragmentId: string,
-  manifest: unknown,
+  state: QlipRuntimeState,
+  payload: {
+    entries?: QlipManifestEntry[];
+    tombstones?: QlipManifestTombstone[];
+  },
 ): Promise<void> => {
+  const seq = nextFragmentSeq(state);
+  const fragment: QlipManifestFragment = {
+    ...state.manifest,
+    entries: payload.entries ?? [],
+    fragmentId: state.fragmentId,
+    fragmentSeq: seq,
+    ...(payload.tombstones ? { tombstones: payload.tombstones } : {}),
+  };
+  // JSON.stringify runs to completion before the first await, so the
+  // payload is a consistent snapshot even while a concurrent capture
+  // mutates the shared manifest.
+  const data = JSON.stringify(fragment, null, 2);
   await commands.writeFile(
-    joinPath(buildDir, MANIFEST_FRAGMENT_DIR, `${fragmentId}.json`),
-    JSON.stringify(manifest, null, 2),
+    joinPath(
+      state.config.buildDir,
+      MANIFEST_FRAGMENT_DIR,
+      fragmentFileName(state.fragmentId, seq),
+    ),
+    data,
     'utf-8',
   );
+  if (state.config.diagnostics === true) {
+    for (const entry of payload.entries ?? []) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[qlip] captured ${entry.storyId} ${entry.kind}/${entry.status} → ${entry.path} (ctx ${state.fragmentId} #${String(seq)})`,
+      );
+    }
+    for (const tombstone of payload.tombstones ?? []) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[qlip] retracted ${tombstone.storyId} ${tombstone.kind} (ctx ${state.fragmentId} #${String(seq)})`,
+      );
+    }
+  }
 };
 
 /**
@@ -609,37 +653,35 @@ const captureScreenshot = async ({
 
   if (resolved.skip) {
     flushConsoleLogs(runtime);
-    pushEntry(
-      runtime,
-      buildEntry({
-        kind,
-        storyId: story.id,
-        storyTitle: story.title,
-        storyName: story.name,
-        componentName: story.componentName,
-        storyFilePath: story.storyFilePath,
-        description: story.description,
-        screenshotName: name,
-        relativePath: usesNamedPath
-          ? buildManualScreenshotPath({
-              buildDir: runtime.config.buildDir,
-              storyId: story.id,
-              storyTitle: story.title,
-              storyName: story.name,
-              screenshotName: name,
-            }).relativePath
-          : buildAutoScreenshotPath({
-              buildDir: runtime.config.buildDir,
-              storyId: story.id,
-              storyTitle: story.title,
-              storyName: story.name,
-            }).relativePath,
-        viewport: resolved.viewport,
-        status: 'skipped',
-        error: testError ?? null,
-        timingsMs: monotonicNow() - captureStart,
-      }),
-    );
+    const skippedEntry = buildEntry({
+      kind,
+      storyId: story.id,
+      storyTitle: story.title,
+      storyName: story.name,
+      componentName: story.componentName,
+      storyFilePath: story.storyFilePath,
+      description: story.description,
+      screenshotName: name,
+      relativePath: usesNamedPath
+        ? buildManualScreenshotPath({
+            buildDir: runtime.config.buildDir,
+            storyId: story.id,
+            storyTitle: story.title,
+            storyName: story.name,
+            screenshotName: name,
+          }).relativePath
+        : buildAutoScreenshotPath({
+            buildDir: runtime.config.buildDir,
+            storyId: story.id,
+            storyTitle: story.title,
+            storyName: story.name,
+          }).relativePath,
+      viewport: resolved.viewport,
+      status: 'skipped',
+      error: testError ?? null,
+      timingsMs: monotonicNow() - captureStart,
+    });
+    pushEntry(runtime, skippedEntry);
     updateStats(runtime, {
       storiesTotal:
         kind === 'auto'
@@ -647,12 +689,9 @@ const captureScreenshot = async ({
           : runtime.manifest.stats.storiesTotal,
       skipped: runtime.manifest.stats.skipped + 1,
     });
-    await writeManifestFragment(
-      commands,
-      runtime.config.buildDir,
-      runtime.fragmentId,
-      runtime.manifest,
-    );
+    await writeManifestFragment(commands, runtime, {
+      entries: [skippedEntry],
+    });
     return;
   }
 
@@ -791,12 +830,7 @@ const captureScreenshot = async ({
     });
   }
 
-  await writeManifestFragment(
-    commands,
-    runtime.config.buildDir,
-    runtime.fragmentId,
-    runtime.manifest,
-  );
+  await writeManifestFragment(commands, runtime, { entries: [entry] });
 };
 
 export const screenshot = async (
@@ -945,6 +979,13 @@ export const captureAutoScreenshot = async (ctx: QlipTestContext) => {
     const pruned = pruneStaleErrorEntries(runtime, story.id);
     if (pruned.length) {
       const { commands } = await ensureBrowserContext();
+      // Fragments are append-only, so dropping the entries from the
+      // in-memory manifest no longer removes them from disk — the
+      // fragments that carried them were already written. Retract them
+      // with a tombstone the merger applies.
+      await writeManifestFragment(commands, runtime, {
+        tombstones: [{ storyId: story.id, kind: 'error' }],
+      });
       for (const entry of pruned) {
         if (entry.path) {
           await bestEffortRemoveFile(

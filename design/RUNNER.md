@@ -219,7 +219,7 @@ that matches their path. Re-evaluate if the runner code grows beyond
 | Module | Status | Notes |
 |---|---|---|
 | `src/upload/upload.ts` | **Reused 100%** | Same multipart wire protocol → server unchanged. |
-| `src/upload/manifest.ts` | **Reused (one fragment)** | Runner is single-process — passes one fragment in, gets a manifest out. Same merger code path. |
+| `src/upload/manifest.ts` | **Reused** | Runner passes its per-capture fragments in, gets a manifest out. Same merger code path. |
 | `src/upload/autodetect.ts` | **Reused 100%** | Branch/commit detection from `$GITHUB_*` / `git`. |
 | `src/upload/reporter.ts` | Not used | Reporter is Vitest-specific. Runner CLI invokes `uploadBuild()` directly. |
 | `src/config/parameters.ts` | **Reused 100%** | Pure resolution function — works with any option source. |
@@ -357,11 +357,14 @@ each is resolved + delete the question from this list.
    we can read it in `postVisit` and trigger an extra capture when
    the story failed. v2.
 7. **Manifest fragment vs single-file.** Current Vitest path writes
-   per-browser-context fragments because each `.stories.tsx` runs in
-   isolation. Runner is one process — could skip fragments. Keeping
-   the fragment indirection means `mergeManifestFragments()` is the
-   single chokepoint for manifest writes, easier to keep both paths
-   in sync. Decision: **keep fragments**, runner writes exactly one.
+   fragments because captures are concurrent and can span processes.
+   Runner is one process — could skip fragments. Keeping the fragment
+   indirection means `mergeManifestFragments()` is the single
+   chokepoint for manifest writes, easier to keep both paths in sync.
+   Decision: **keep fragments**. Since 2026-08-15 the runner writes
+   one per capture rather than one per process, matching the
+   append-only contract in `MANIFEST_FRAGMENTS.md` — sharded runners
+   share a build dir, so no writer may revisit a file.
 
 ---
 
@@ -475,8 +478,9 @@ qlip-serve-and-test --shards 8
 2. Loop k = 1..N. Each iteration spawns `test-storybook --url
    <served-url> --shard k/N` as a fresh subprocess.
 3. Each subprocess inherits the same childEnv → same
-   `QLIP_BUILD_ID` → writes its manifest fragment into the same
-   `<outputDir>/<buildId>/manifest-fragments/` directory.
+   `QLIP_BUILD_ID` → writes its manifest fragments into the same
+   `<outputDir>/<buildId>/manifest-fragments/` directory. Fragment
+   names carry a per-process id, so shards cannot collide.
 4. After all N shards complete (or one fails), run
    `qlip-upload` **once**. The fragment merger
    (`src/upload/manifest.ts:mergeManifestFragments`) reads every
