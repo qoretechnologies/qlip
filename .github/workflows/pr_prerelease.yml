@@ -44,11 +44,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22.19.0
+          cache: "npm"
 
-      # --frozen-lockfile so the published artifact is built from the exact dependency
-      # tree the PR committed, not whatever the range happens to resolve to today.
+      # `npm ci` so the published artifact is built from the exact dependency tree the
+      # PR committed, not whatever the ranges happen to resolve to today.
+      #
+      # npm, not yarn: this repo ships a package-lock.json and its other workflows use
+      # npm. Installing with yarn here resolved a different tree — one without
+      # @types/react, which is not declared in package.json and only ever arrives
+      # hoisted — so every type-aware lint rule saw React as `any` and the job failed
+      # with 33 errors that do not reproduce anywhere else.
       - name: Install modules
-        run: yarn install --frozen-lockfile
+        run: npm ci
 
       # Gate the publish on the checks the PR itself must pass. Without this a red PR
       # still ships an installable package, and a consumer pinning it inherits the
@@ -56,16 +63,16 @@ jobs:
       # are left to the PR's own workflow; these are the ones that decide whether the
       # published artifact is sound.
       - name: Lint
-        run: yarn lint
+        run: npm run lint
 
       - name: Typecheck
-        run: yarn typecheck
+        run: npm run typecheck
 
       - name: Test
-        run: yarn test:unit --run
+        run: npm run test -- --project unit --run
 
       - name: Build
-        run: yarn build
+        run: npm run build
 
       # Stamp a prerelease OF THE VERSION THIS PR IS RELEASING — the one already in
       # package.json, which every PR is required to bump.
@@ -133,7 +140,7 @@ jobs:
               'Install it in a consumer (updates `package.json` + lockfile):',
               '',
               '```bash',
-              `yarn add @qoretechnologies/qlip@${version}`,
+              `npm install @qoretechnologies/qlip@${version}`,
               '```',
               '',
               '_Published under the `pr` dist-tag — `latest`/`beta` are untouched. '
