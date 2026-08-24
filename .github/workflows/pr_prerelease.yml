@@ -1,0 +1,162 @@
+# Prerelease publish for open PRs to develop.
+#
+# On every push to a PR that targets `develop`, build the package, stamp a unique
+# prerelease version (`<version>-pr.<PR#>.g<short-sha>`) and publish it to npm under
+# the `pr` dist-tag — NOT `latest`/`beta`, so ordinary installs are never affected.
+# A sticky PR comment carries the exact install command.
+#
+# Why: it lets a consumer install a real, permanent qlip build of an UNMERGED PR,
+# instead of the alternatives — pinning a `link:` path that only works on one machine,
+# or pushing an unreleased version into the consumer, which breaks the build for
+# everyone who pulls it.
+#
+# Restricted to same-repo PRs so the org NPM_TOKEN is never exposed to forks.
+
+name: PR prerelease
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - develop
+
+# Supersede in-flight runs when the PR gets a newer commit.
+concurrency:
+  group: pr-prerelease-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  Prerelease:
+    # Never run for PRs opened from forks — the org NPM_TOKEN must not be exposed.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+
+    steps:
+      # Check out the PR head exactly, so the build matches the stamped sha.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: "npm"
+
+      # `npm ci` so the published artifact is built from the exact dependency tree the
+      # PR committed, not whatever the ranges happen to resolve to today.
+      #
+      # npm, not yarn: this repo ships a package-lock.json and its other workflows use
+      # npm. Installing with yarn here resolved a different tree — one without
+      # @types/react, which is not declared in package.json and only ever arrives
+      # hoisted — so every type-aware lint rule saw React as `any` and the job failed
+      # with 33 errors that do not reproduce anywhere else.
+      - name: Install modules
+        run: npm ci
+
+      # Gate the publish on the checks the PR itself must pass. Without this a red PR
+      # still ships an installable package, and a consumer pinning it inherits the
+      # breakage with nothing on the tin to warn them. Story tests need a browser and
+      # are left to the PR's own workflow; these are the ones that decide whether the
+      # published artifact is sound.
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm run test -- --project unit --run
+
+      - name: Build
+        run: npm run build
+
+      # Stamp a prerelease OF THE VERSION THIS PR IS RELEASING — the one already in
+      # package.json, which every PR is required to bump.
+      #
+      # Not the NEXT patch: a prerelease of a version nobody intends to ship can never
+      # become the release it previews, and it sorts ABOVE that release, so a consumer
+      # pinned to it never moves forward. Semver already orders a prerelease between
+      # the previous release and its own:
+      #
+      #   0.1.3  <  0.1.4-pr.42.gabc123  <  0.1.4
+      #
+      # The sha identifier is prefixed with `g` (git-describe style) so an all-digit
+      # short sha can never become an invalid leading-zero numeric identifier.
+      - name: Stamp prerelease version
+        id: version
+        run: |
+          BASE=$(node -p "require('./package.json').version.split('-')[0]")
+          SHA=$(printf '%s' "${{ github.event.pull_request.head.sha }}" | cut -c1-7)
+          VER="${BASE}-pr.${{ github.event.pull_request.number }}.g${SHA}"
+
+          # Publish only when package.json names a version that is not on npm yet.
+          #
+          # If it is already published, this PR has not bumped — either because it does
+          # not need to (a CI-, docs- or test-only change) or because it forgot. Cutting
+          # a prerelease of an already-released version would sort BELOW that release
+          # and hand consumers something older than they have, so it is skipped.
+          #
+          # Skipped, not failed: a workflow-only PR has nothing to preview and should
+          # not go red for it. A PR that genuinely forgot its bump is still caught at
+          # merge, where the release job cannot publish over an existing version.
+          if npm view "$(node -p "require('./package.json').name")@${BASE}" version >/dev/null 2>&1; then
+            echo "::notice::package.json is at ${BASE}, which is already published — no prerelease cut. Bump the version if this PR is meant to ship one."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          npm pkg set version="$VER"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+          echo "Publishing $VER"
+
+      - name: Publish prerelease to npm (pr tag)
+        if: steps.version.outputs.publish == 'true'
+        uses: JS-DevTools/npm-publish@v1
+        with:
+          token: ${{ secrets.NPM_TOKEN }}
+          tag: pr
+          access: public
+
+      - name: Comment install command on the PR
+        if: steps.version.outputs.publish == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const version = ${{ toJSON(steps.version.outputs.version) }};
+            const marker = '<!-- qlip-pr-prerelease -->';
+            const body = [
+              marker,
+              '📦 **Prerelease published** for this PR:',
+              '',
+              '```',
+              `@qoretechnologies/qlip@${version}`,
+              '```',
+              '',
+              'Install it in a consumer (updates `package.json` + lockfile):',
+              '',
+              '```bash',
+              `npm install @qoretechnologies/qlip@${version}`,
+              '```',
+              '',
+              '_Published under the `pr` dist-tag — `latest`/`beta` are untouched. '
+                + 'Keep this pin on a local branch only: repoint the consumer to the '
+                + 'released version before its branch merges._',
+            ].join('\n');
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner,
+              repo,
+              issue_number,
+            });
+            const existing = comments.find((c) => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
