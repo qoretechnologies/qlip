@@ -6,12 +6,25 @@ import { realDateNow } from './clock.js';
 
 const isBrowser = () => typeof globalThis.__vitest_browser__ !== 'undefined';
 
-const injectViewportStyles = () => {
+export const VIEWPORT_RESET_STYLE_ID = '__qlip-viewport-reset';
+
+// Storybook's portable stories mount every story into an anonymous <div>
+// (no id, no class) appended to <body>; it needs the full viewport for
+// height-filling stories. A bare `body > div` also matched everything React
+// portals into <body> (reqore's fixed-position floating-actions bar, popovers)
+// and stretched it to 100% x 100%, which captured as opaque black rectangles.
+// `:first-of-type` is no alternative: Storybook's hidden `sb-wrapper` divs
+// precede the canvas.
+export const VIEWPORT_RESET_CSS =
+  'html, body, #storybook-root, body > div:not([class]):not([id]) { width: 100%; height: 100%; margin: 0; padding: 0; }';
+
+/** Exported for unit testing. */
+export const injectViewportStyles = () => {
   const doc = globalThis.document;
   if (!doc) return;
   const style = doc.createElement('style');
-  style.id = '__qlip-viewport-reset';
-  style.textContent = `html, body, body > div, #storybook-root { width: 100%; height: 100%; margin: 0; padding: 0; }`;
+  style.id = VIEWPORT_RESET_STYLE_ID;
+  style.textContent = VIEWPORT_RESET_CSS;
   doc.head.appendChild(style);
 };
 
