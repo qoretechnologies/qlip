@@ -17,12 +17,16 @@
 import { describe, expect, it } from 'vitest';
 import { mergeConfig } from 'vite';
 import { qlipVitestPlugin } from '../../src/plugin/vitestPlugin.js';
+import type { QlipPluginOptions, QlipRuntimeConfig } from '../../src/types.js';
 
 type TTestConfig = { test?: Record<string, unknown> } & Record<string, unknown>;
 
 /** Invoke the plugin's `config` hook the way Vite does, then merge. */
-function resolveWithPlugin(userConfig: TTestConfig): TTestConfig {
-  const plugin = qlipVitestPlugin({ buildId: 'test-build' });
+function resolveWithPlugin(
+  userConfig: TTestConfig,
+  options: QlipPluginOptions = {},
+): TTestConfig {
+  const plugin = qlipVitestPlugin({ buildId: 'test-build', ...options });
   const hook = plugin.config;
   const handler = typeof hook === 'function' ? hook : hook?.handler;
   if (!handler) throw new Error('plugin exposes no config hook');
@@ -116,5 +120,35 @@ describe('qlipVitestPlugin config hook — no duplicate merge (qlip#17)', () => 
     const reporters = merged.test?.reporters as unknown[];
     expect(occurrences(reporters, (r) => r === 'default')).toBe(1);
     expect(occurrences(reporters, isQlipReporter)).toBe(1);
+  });
+});
+
+describe('qlipVitestPlugin config hook — browser commands', () => {
+  it('registers qlipBrowserViewport beside the consumer\'s own commands', () => {
+    const mine = () => 'mine';
+    const merged = resolveWithPlugin({
+      test: { browser: { enabled: true, commands: { mine } } },
+    });
+    const browser = merged.test?.browser as {
+      enabled: boolean;
+      commands: Record<string, unknown>;
+    };
+    expect(browser.enabled).toBe(true);
+    expect(browser.commands.mine).toBe(mine);
+    expect(typeof browser.commands.qlipBrowserViewport).toBe('function');
+  });
+});
+
+describe('qlipVitestPlugin config hook — capture defaults', () => {
+  /** The capture defaults the plugin bakes into the browser runtime. */
+  const runtimeDefaults = (options: QlipPluginOptions) => {
+    const merged = resolveWithPlugin({}, options);
+    const define = merged.define as { __QLIP_CONFIG__: string };
+    return (JSON.parse(define.__QLIP_CONFIG__) as QlipRuntimeConfig).defaults;
+  };
+
+  it('leaves fullSizeCaptures off unless the consumer turns it on', () => {
+    expect(runtimeDefaults({}).fullSizeCaptures).toBe(false);
+    expect(runtimeDefaults({ fullSizeCaptures: true }).fullSizeCaptures).toBe(true);
   });
 });

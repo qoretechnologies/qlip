@@ -46,6 +46,11 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { resolveQlipOptions } from '../config/parameters.js';
 import {
+  fullPageCapWarning,
+  growViewportToContent,
+  measureContentHeight,
+} from '../runtime/fullPage.js';
+import {
   DEFAULT_OUTPUT_DIR,
   DEFAULT_VIEWPORT,
   MANIFEST_FRAGMENT_DIR,
@@ -171,11 +176,16 @@ const buildResolvedDefaults = (
   return {
     outputDir: DEFAULT_OUTPUT_DIR,
     viewport: fallbackViewport,
+    // Not read on this path: `page.setViewportSize` sizes the page itself,
+    // so every capture here is full size already.
+    fullSizeCaptures: override?.fullSizeCaptures ?? false,
     skip: false,
     disableAnimations: override?.disableAnimations ?? false,
     pauseAnimationsAtEnd: override?.pauseAnimationsAtEnd ?? false,
     disableBackdropFilter: override?.disableBackdropFilter ?? true,
     captureOnError: override?.captureOnError ?? false,
+    fullPage: override?.fullPage ?? false,
+    fullPageMaxHeight: override?.fullPageMaxHeight ?? 10000,
     waitForIdleMs: override?.waitForIdleMs ?? 300,
     maxWaitForIdleMs: override?.maxWaitForIdleMs ?? 2000,
     ignoreElements: override?.ignoreElements ?? [],
@@ -375,6 +385,7 @@ const qlipCaptureInner = async (
   let status: QlipEntryStatus = 'captured';
   let error: { message: string; stack?: string } | null = null;
   let maskIds: string[] = [];
+  let grownTo: number | null = null;
   try {
     await page.setViewportSize({
       width: resolved.viewport.width,
@@ -388,6 +399,28 @@ const qlipCaptureInner = async (
       idleMs: resolved.waitForIdleMs,
       maxWaitMs: resolved.maxWaitForIdleMs,
     });
+    if (resolved.fullPage) {
+      // Here the viewport IS the browser window, so growing it is one call;
+      // the measure runs inside the page (see ../runtime/fullPage.ts).
+      const growth = await growViewportToContent({
+        viewport: resolved.viewport,
+        maxHeight: resolved.fullPageMaxHeight,
+        setViewport: (width, height) => page.setViewportSize({ width, height }),
+        measure: (first) => page.evaluate(measureContentHeight, { reset: first }),
+        settle: () =>
+          page.evaluate(waitForDomIdleInPage, {
+            idleMs: resolved.waitForIdleMs,
+            maxWaitMs: resolved.maxWaitForIdleMs,
+          }),
+      });
+      if (growth.height !== resolved.viewport.height) {
+        grownTo = growth.height;
+      }
+      const warning = fullPageCapWarning(context.id, growth, resolved.fullPageMaxHeight);
+      if (warning) {
+        console.warn(warning);
+      }
+    }
     if (resolved.ignoreElements.length > 0) {
       maskIds = await page.evaluate(applyIgnoreMasksInPage, {
         selectors: resolved.ignoreElements,
@@ -407,6 +440,18 @@ const qlipCaptureInner = async (
         await page.evaluate(removeIgnoreMasksInPage, { ids: maskIds });
       } catch {
         /* page may have navigated away; masks die with it */
+      }
+    }
+    if (grownTo !== null) {
+      // The pinned viewport is the baseline key; whatever the test-runner
+      // does with the page next should see the story's own size again.
+      try {
+        await page.setViewportSize({
+          width: resolved.viewport.width,
+          height: resolved.viewport.height,
+        });
+      } catch {
+        /* the next capture sets its own viewport anyway */
       }
     }
   }

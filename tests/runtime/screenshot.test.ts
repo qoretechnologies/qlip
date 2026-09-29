@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Mock } from 'vitest';
 import {
   captureAutoScreenshot,
   captureErrorScreenshot,
@@ -8,6 +9,7 @@ import { getRuntimeState } from '../../src/runtime/context.js';
 import type {
   QlipManifest,
   QlipManifestFragment,
+  QlipParameters,
   QlipRuntimeConfig,
 } from '../../src/types.js';
 
@@ -21,9 +23,18 @@ vi.mock('@vitest/browser/context', () => {
     // Vitest 4+ built-in used by the retry-mask fix in
     // captureAutoScreenshot to delete PNGs for pruned error entries.
     removeFile: vi.fn(),
+    // qlip's own command, registered by the plugin: the browser window.
+    qlipBrowserViewport: vi.fn(),
   };
   return { page, commands };
 });
+
+// A `fullPage` capture measures the page, and this project has no DOM; the
+// measure has its own tests (fullPage.test.ts). Here it finds nothing to grow.
+vi.mock('../../src/runtime/fullPage.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/runtime/fullPage.js')>()),
+  measureContentHeight: vi.fn(() => 0),
+}));
 
 const runtimeConfig: QlipRuntimeConfig = {
   buildId: 'test-build',
@@ -67,6 +78,7 @@ beforeEach(async () => {
   page.screenshot.mockReset();
   commands.writeFile.mockReset();
   commands.removeFile.mockReset();
+  commands.qlipBrowserViewport.mockReset();
 });
 
 describe('screenshot capture', () => {
@@ -998,5 +1010,134 @@ describe('manifest fragment durability', () => {
       .map((call) => JSON.parse(String(call[1])) as QlipManifestFragment)
       .flatMap((fragment) => fragment.tombstones ?? []);
     expect(tombstones).toEqual([{ storyId: 'example--page', kind: 'error' }]);
+  });
+});
+
+/**
+ * Vitest scales the test iframe down to fit the browser window, so a
+ * viewport larger than the window is captured shrunk unless the window grows
+ * with it. Growing it changes the size of captures that have baselines, so
+ * it is opt-in (`fullSizeCaptures`) — except for `fullPage`, which is
+ * unreadable scaled.
+ */
+describe('capture window (fullSizeCaptures)', () => {
+  const useConfig = (defaults: Partial<QlipRuntimeConfig['defaults']> = {}) => {
+    resetRuntime();
+    globalThis.__QLIP_CONFIG__ = {
+      ...runtimeConfig,
+      defaults: {
+        ...runtimeConfig.defaults,
+        fullSizeCaptures: false,
+        fullPage: false,
+        fullPageMaxHeight: 10000,
+        waitForIdleMs: 0,
+        maxWaitForIdleMs: 0,
+        captureConsole: false,
+        ...defaults,
+      },
+    };
+  };
+
+  type Size = { width: number; height: number };
+
+  /**
+   * The browser window as the plugin's command sees it: 1280×720, the
+   * Playwright default Vitest leaves in place headless. Called without a
+   * size it answers the current one; with one it resizes and answers the
+   * previous one.
+   */
+  const useWindow = async () => {
+    const { commands } = await import('@vitest/browser/context');
+    const browserWindow = commands.qlipBrowserViewport as Mock<
+      (size?: Size | null) => Promise<Size>
+    >;
+    let size: Size = { width: 1280, height: 720 };
+    browserWindow.mockImplementation((next) => {
+      const previous = size;
+      if (next) size = next;
+      return Promise.resolve(previous);
+    });
+    return browserWindow;
+  };
+
+  const capture = async (qlip: QlipParameters, storyId = 'example--page') => {
+    const { page } = await import('@vitest/browser/context');
+    page.screenshot.mockResolvedValue('ok');
+    await captureAutoScreenshot({
+      task: { meta: { storyId }, name: 'Desktop', suite: { name: 'Example/Page' } },
+      story: { id: storyId, parameters: { qlip } },
+    });
+  };
+
+  it('leaves the window alone by default, so a capture keeps the size it had', async () => {
+    useConfig();
+    const browserWindow = await useWindow();
+    const { page } = await import('@vitest/browser/context');
+
+    await capture({ viewport: { width: 1920, height: 1080 } });
+
+    expect(browserWindow).not.toHaveBeenCalled();
+    expect(page.viewport.mock.calls).toEqual([[1920, 1080]]);
+    expect(getRuntimeState()?.manifest.entries[0]?.status).toBe('captured');
+  });
+
+  it('grows the window to hold the viewport with fullSizeCaptures, and puts it back', async () => {
+    useConfig();
+    const browserWindow = await useWindow();
+    const { page } = await import('@vitest/browser/context');
+
+    await capture({ viewport: { width: 1920, height: 1080 }, fullSizeCaptures: true });
+
+    expect(browserWindow.mock.calls).toEqual([
+      [],
+      [{ width: 1920, height: 1080 }],
+      [{ width: 1280, height: 720 }],
+    ]);
+    // Grown before the iframe is sized into it, put back after the shot.
+    const [, grow, restore] = browserWindow.mock.invocationCallOrder;
+    expect(grow).toBeLessThan(page.viewport.mock.invocationCallOrder[0]);
+    expect(restore).toBeGreaterThan(page.screenshot.mock.invocationCallOrder[0]);
+    expect(getRuntimeState()?.manifest.entries[0]?.viewport).toEqual({
+      width: 1920,
+      height: 1080,
+    });
+  });
+
+  it('takes fullSizeCaptures from the plugin, and a story can opt back out', async () => {
+    useConfig({ fullSizeCaptures: true });
+    const browserWindow = await useWindow();
+
+    await capture({ viewport: { width: 390, height: 844 } }, 'phone--in');
+    expect(browserWindow.mock.calls).toEqual([
+      [],
+      [{ width: 1280, height: 844 }],
+      [{ width: 1280, height: 720 }],
+    ]);
+
+    browserWindow.mockClear();
+    await capture({ viewport: { width: 390, height: 844 }, fullSizeCaptures: false }, 'phone--out');
+    expect(browserWindow).not.toHaveBeenCalled();
+  });
+
+  it('asks the window but leaves it alone when the viewport already fits', async () => {
+    useConfig({ fullSizeCaptures: true });
+    const browserWindow = await useWindow();
+
+    await capture({ viewport: { width: 1280, height: 720 } });
+
+    expect(browserWindow.mock.calls).toEqual([[]]);
+  });
+
+  it('grows the window for a fullPage capture with fullSizeCaptures off', async () => {
+    useConfig();
+    const browserWindow = await useWindow();
+
+    await capture({ viewport: { width: 390, height: 844 }, fullPage: true });
+
+    expect(browserWindow.mock.calls).toEqual([
+      [],
+      [{ width: 1280, height: 844 }],
+      [{ width: 1280, height: 720 }],
+    ]);
   });
 });

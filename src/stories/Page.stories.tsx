@@ -20,6 +20,18 @@ type StoryContext = Parameters<NonNullable<Story['play']>>[0];
 
 export const LoggedOut: Story = {};
 
+/**
+ * A desktop viewport wider and taller than the 1280×720 headless browser
+ * window. `fullSizeCaptures` grows the window to hold it, so the capture is
+ * 1920×1080; without it Vitest would scale the story down to 1280×720. The
+ * e2e test reads the PNG.
+ */
+export const DesktopFullSize: Story = {
+  parameters: {
+    qlip: { viewport: { width: 1920, height: 1080 }, fullSizeCaptures: true },
+  },
+};
+
 // More on component testing: https://storybook.js.org/docs/writing-tests/interaction-testing
 export const LoggedIn: Story = {
   play: async (ctx: StoryContext) => {

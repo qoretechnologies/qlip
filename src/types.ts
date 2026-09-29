@@ -5,7 +5,31 @@ export interface QlipViewport {
 
 export interface QlipCaptureOptions {
   skip?: boolean;
+  /**
+   * The capture's viewport, and the baseline key on the server. Under
+   * Vitest browser mode a viewport larger than the browser window is
+   * captured scaled down to fit it, unless `fullSizeCaptures` is on.
+   */
   viewport?: QlipViewport;
+  /**
+   * Capture at the full size of `viewport`, pixel for pixel. Under Vitest
+   * browser mode the browser window (the Playwright context viewport,
+   * 1280×720 headless unless configured) does not follow `viewport`: Vitest
+   * sizes the test iframe to the viewport and scales the iframe down to fit
+   * the window. The layout is the viewport's, but the pixels are shrunk: a
+   * 1920×1080 story is captured at 1280×720, a 390×844 phone story at
+   * 333×720. With this on, the window grows to hold the viewport for the
+   * capture and is put back afterwards, so the capture is exactly `viewport`.
+   *
+   * Off by default: turning it on changes the size of every capture that was
+   * being scaled, and the server reports each one as changed against its
+   * baseline, so accept them once. A `fullPage` capture grows the window
+   * either way. The Storybook test-runner path sizes the page's own viewport
+   * and always captures at full size.
+   *
+   * @default false
+   */
+  fullSizeCaptures?: boolean;
   disableAnimations?: boolean;
   pauseAnimationsAtEnd?: boolean;
   /**
@@ -19,6 +43,38 @@ export interface QlipCaptureOptions {
    * @default true
    */
   disableBackdropFilter?: boolean;
+  /**
+   * Grow the viewport to the page's full content height for the capture,
+   * then put it back. A story that pins a phone viewport is otherwise
+   * photographed one screen tall with the rest of the page scrolled away —
+   * and a Playwright "full page" shot would not help, because an app shell
+   * usually scrolls an inner box, not the document. The height is measured
+   * from the document AND every scrolling element (an `overflow-y: auto |
+   * scroll` box whose `scrollHeight` exceeds its `clientHeight`), and
+   * re-measured after each growth until nothing scrolls. A box that keeps
+   * its height when the viewport grows (a fixed-height code block) stays
+   * scrolled and gives its growth back, and content that grows with the
+   * viewport is not chased. Capped at `fullPageMaxHeight`. Under Vitest
+   * browser mode the browser window (the Playwright context viewport) grows
+   * with the test iframe whatever `fullSizeCaptures` says, or the capture
+   * would be scaled down to fit the window; both are put back afterwards.
+   * The manifest still reports the pinned `viewport` — that is the baseline
+   * key; the picture is simply taller. A capture whose content height
+   * changed shows on the server as a dimensions change rather than a pixel
+   * diff.
+   *
+   * @default false
+   */
+  fullPage?: boolean;
+  /**
+   * The tallest a `fullPage` capture may grow to, in CSS pixels. Chromium
+   * refuses viewports past 16384; the default leaves room for very long
+   * pages without inviting a runaway layout. A page taller than this is
+   * captured at the cap, with a `[qlip] fullPage:` warning naming the story.
+   *
+   * @default 10000
+   */
+  fullPageMaxHeight?: number;
   waitForIdleMs?: number;
   maxWaitForIdleMs?: number;
   ignoreElements?: string[];

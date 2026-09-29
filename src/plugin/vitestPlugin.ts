@@ -15,6 +15,13 @@ import {
 import { QlipPluginOptions, QlipRuntimeConfig } from '../types.js';
 import { QlipUploadReporter } from '../upload/reporter.js';
 import { stashFinalizeConfig } from '../runtime/global-setup.js';
+import {
+  QLIP_BROWSER_VIEWPORT_COMMAND,
+  qlipBrowserViewport,
+} from './browserViewport.js';
+
+/** See `QlipCaptureOptions.fullPageMaxHeight`. */
+const DEFAULT_FULL_PAGE_MAX_HEIGHT = 10000;
 
 const normalizePath = (value: string) => value.replace(/\\/g, '/');
 
@@ -43,6 +50,9 @@ export const qlipVitestPlugin = (options: QlipPluginOptions = {}): Plugin => {
         defaults: {
           outputDir,
           viewport: options.viewport ?? DEFAULT_VIEWPORT,
+          // Off by default — turning it on resizes every capture that was
+          // being scaled to fit the window. See QlipCaptureOptions.
+          fullSizeCaptures: options.fullSizeCaptures ?? false,
           skip: false,
           disableAnimations: options.disableAnimations ?? false,
           pauseAnimationsAtEnd: options.pauseAnimationsAtEnd ?? false,
@@ -50,6 +60,8 @@ export const qlipVitestPlugin = (options: QlipPluginOptions = {}): Plugin => {
           // never a wanted baseline. See QlipCaptureOptions.
           disableBackdropFilter: options.disableBackdropFilter ?? true,
           captureOnError: options.captureOnError ?? false,
+          fullPage: options.fullPage ?? false,
+          fullPageMaxHeight: options.fullPageMaxHeight ?? DEFAULT_FULL_PAGE_MAX_HEIGHT,
           waitForIdleMs: options.waitForIdleMs ?? 300,
           maxWaitForIdleMs: options.maxWaitForIdleMs ?? 2000,
           ignoreElements: options.ignoreElements ?? [],
@@ -216,6 +228,16 @@ export const qlipVitestPlugin = (options: QlipPluginOptions = {}): Plugin => {
           setupFiles: [setupFile],
           globalSetup: [globalSetupFile],
           reporters: reportersList,
+          // The runtime grows the browser window for a `fullPage` capture,
+          // and for every capture with `fullSizeCaptures`, through this
+          // command; it runs here, where the Playwright page is.
+          // `mergeConfig` merges it beside any commands the consumer
+          // declares.
+          browser: {
+            commands: {
+              [QLIP_BROWSER_VIEWPORT_COMMAND]: qlipBrowserViewport,
+            },
+          },
         },
       };
     },

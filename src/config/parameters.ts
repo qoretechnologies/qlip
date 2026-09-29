@@ -3,9 +3,12 @@ import { QlipConsoleLevel, QlipParameters, QlipResolvedDefaults, QlipScreenshotO
 export interface QlipResolvedOptions {
   skip: boolean;
   viewport: { width: number; height: number };
+  fullSizeCaptures: boolean;
   disableAnimations: boolean;
   pauseAnimationsAtEnd: boolean;
   disableBackdropFilter: boolean;
+  fullPage: boolean;
+  fullPageMaxHeight: number;
   waitForIdleMs: number;
   maxWaitForIdleMs: number;
   ignoreElements: string[];
@@ -30,6 +33,10 @@ export const resolveQlipOptions = ({
   return {
     skip: override?.skip ?? story?.skip ?? defaults.skip,
     viewport: override?.viewport ?? story?.viewport ?? defaults.viewport,
+    fullSizeCaptures:
+      override?.fullSizeCaptures ??
+      story?.fullSizeCaptures ??
+      defaults.fullSizeCaptures,
     disableAnimations:
       override?.disableAnimations ??
       story?.disableAnimations ??
@@ -42,6 +49,11 @@ export const resolveQlipOptions = ({
       override?.disableBackdropFilter ??
       story?.disableBackdropFilter ??
       defaults.disableBackdropFilter,
+    fullPage: override?.fullPage ?? story?.fullPage ?? defaults.fullPage,
+    fullPageMaxHeight:
+      override?.fullPageMaxHeight ??
+      story?.fullPageMaxHeight ??
+      defaults.fullPageMaxHeight,
     waitForIdleMs:
       override?.waitForIdleMs ??
       story?.waitForIdleMs ??

@@ -178,6 +178,8 @@ describe('resolveQlipOptions', () => {
       disableAnimations: false,
       pauseAnimationsAtEnd: false,
       disableBackdropFilter: true,
+      fullPage: false,
+      fullPageMaxHeight: 10000,
       captureOnError: false,
       waitForIdleMs: 300,
       maxWaitForIdleMs: 2000,
@@ -208,6 +210,53 @@ describe('resolveQlipOptions', () => {
         story: { disableBackdropFilter: false },
         override: { disableBackdropFilter: true },
       }).disableBackdropFilter,
+    ).toBe(true);
+  });
+
+  it('resolves fullSizeCaptures with override > story > defaults', () => {
+    const base = {
+      outputDir: './qlip/screenshots',
+      viewport: { width: 1200, height: 800 },
+      fullSizeCaptures: false,
+      skip: false,
+      disableAnimations: false,
+      pauseAnimationsAtEnd: false,
+      disableBackdropFilter: true,
+      fullPage: false,
+      fullPageMaxHeight: 10000,
+      captureOnError: false,
+      waitForIdleMs: 300,
+      maxWaitForIdleMs: 2000,
+      ignoreElements: [],
+      auto: true,
+      manual: true,
+      error: true,
+      captureConsole: true,
+      captureConsoleLevels: ['error'] as const,
+      maxConsoleLogs: 50,
+      consoleLogExcludePatterns: [],
+    };
+    // Off unless something turns it on.
+    expect(resolveQlipOptions({ defaults: base }).fullSizeCaptures).toBe(false);
+    // A story opts in on its own…
+    expect(
+      resolveQlipOptions({ defaults: base, story: { fullSizeCaptures: true } })
+        .fullSizeCaptures,
+    ).toBe(true);
+    // …or out of a plugin-wide opt-in.
+    expect(
+      resolveQlipOptions({
+        defaults: { ...base, fullSizeCaptures: true },
+        story: { fullSizeCaptures: false },
+      }).fullSizeCaptures,
+    ).toBe(false);
+    // An explicit override beats both.
+    expect(
+      resolveQlipOptions({
+        defaults: base,
+        story: { fullSizeCaptures: false },
+        override: { fullSizeCaptures: true },
+      }).fullSizeCaptures,
     ).toBe(true);
   });
 });
