@@ -9,6 +9,7 @@ import { resolveQlipOptions } from '../config/parameters.js';
 import {
   BrowserViewportCommand,
   createCaptureViewport,
+  fullPageCapWarning,
   growViewportToContent,
   measureContentHeight,
 } from './fullPage.js';
@@ -748,13 +749,17 @@ const captureScreenshot = async ({
     });
     await waitForDomIdle(resolved.waitForIdleMs, resolved.maxWaitForIdleMs);
     if (resolved.fullPage) {
-      await growViewportToContent({
+      const growth = await growViewportToContent({
         viewport: resolved.viewport,
         maxHeight: resolved.fullPageMaxHeight,
         setViewport: captureViewport.set,
-        measure: () => measureContentHeight(),
+        measure: (first) => measureContentHeight({ reset: first }),
         settle: () => waitForDomIdle(resolved.waitForIdleMs, resolved.maxWaitForIdleMs),
       });
+      const warning = fullPageCapWarning(story.id, growth, resolved.fullPageMaxHeight);
+      if (warning) {
+        console.warn(warning);
+      }
     }
     cleanupMasks = applyIgnoreMasks(resolved.ignoreElements);
     await page.screenshot({ path: absolutePath, save: true });

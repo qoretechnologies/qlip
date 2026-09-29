@@ -45,7 +45,11 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { resolveQlipOptions } from '../config/parameters.js';
-import { growViewportToContent, measureContentHeight } from '../runtime/fullPage.js';
+import {
+  fullPageCapWarning,
+  growViewportToContent,
+  measureContentHeight,
+} from '../runtime/fullPage.js';
 import {
   DEFAULT_OUTPUT_DIR,
   DEFAULT_VIEWPORT,
@@ -395,17 +399,24 @@ const qlipCaptureInner = async (
     if (resolved.fullPage) {
       // Here the viewport IS the browser window, so growing it is one call;
       // the measure runs inside the page (see ../runtime/fullPage.ts).
-      grownTo = await growViewportToContent({
+      const growth = await growViewportToContent({
         viewport: resolved.viewport,
         maxHeight: resolved.fullPageMaxHeight,
         setViewport: (width, height) => page.setViewportSize({ width, height }),
-        measure: () => page.evaluate(measureContentHeight, undefined),
+        measure: (first) => page.evaluate(measureContentHeight, { reset: first }),
         settle: () =>
           page.evaluate(waitForDomIdleInPage, {
             idleMs: resolved.waitForIdleMs,
             maxWaitMs: resolved.maxWaitForIdleMs,
           }),
       });
+      if (growth.height !== resolved.viewport.height) {
+        grownTo = growth.height;
+      }
+      const warning = fullPageCapWarning(context.id, growth, resolved.fullPageMaxHeight);
+      if (warning) {
+        console.warn(warning);
+      }
     }
     if (resolved.ignoreElements.length > 0) {
       maskIds = await page.evaluate(applyIgnoreMasksInPage, {

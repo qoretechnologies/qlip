@@ -371,4 +371,65 @@ describe('qlipCapture (fullPage)', () => {
 
     expect(page.$viewports).toEqual([{ width: 390, height: 844 }]);
   });
+
+  it('starts a new measure memory for each capture', async () => {
+    const page = makeStubPage();
+    page.$contentHeights = [3589, 3589];
+    const getStoryContext = vi.fn(() => Promise.resolve({
+      parameters: {
+        qlip: { viewport: { width: 390, height: 844 }, fullPage: true } as QlipParameters,
+      },
+    }));
+
+    await qlipCapture(page, { id: 'phone--story' }, { getStoryContext });
+
+    const measures = page.$evaluates.filter((e) => e.fnSource.includes('scrollHeight'));
+    expect(measures.map((e) => e.arg)).toEqual([{ reset: true }, { reset: false }]);
+  });
+
+  it('gives back growth a fixed box asked for, and has nothing left to restore', async () => {
+    const page = makeStubPage();
+    // Round 1 grows for a box; round 2 finds it kept its height.
+    page.$contentHeights = [2644, 0];
+    const getStoryContext = vi.fn(() => Promise.resolve({
+      parameters: {
+        qlip: { viewport: { width: 390, height: 844 }, fullPage: true } as QlipParameters,
+      },
+    }));
+
+    await qlipCapture(page, { id: 'code-block--story' }, { getStoryContext });
+
+    expect(page.$viewports).toEqual([
+      { width: 390, height: 844 },
+      { width: 390, height: 2644 },
+      { width: 390, height: 844 },
+    ]);
+    expect(page.$screenshots).toHaveLength(1);
+  });
+
+  it('warns when the page is taller than fullPageMaxHeight', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const page = makeStubPage();
+    page.$contentHeights = [20000, 20000];
+    const getStoryContext = vi.fn(() => Promise.resolve({
+      parameters: {
+        qlip: {
+          viewport: { width: 390, height: 844 },
+          fullPage: true,
+          fullPageMaxHeight: 6000,
+        } as QlipParameters,
+      },
+    }));
+
+    try {
+      await qlipCapture(page, { id: 'feed--mobile' }, { getStoryContext });
+
+      expect(page.$viewports[1]).toEqual({ width: 390, height: 6000 });
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('[qlip] fullPage: feed--mobile is 20000px tall'),
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });

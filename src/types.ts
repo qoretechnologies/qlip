@@ -33,10 +33,13 @@ export interface QlipCaptureOptions {
    * and a Playwright "full page" shot would not help, because an app shell
    * usually scrolls an inner box, not the document. The height is measured
    * from the document AND every scrolling element (an `overflow-y: auto |
-   * scroll` box whose `scrollHeight` exceeds its `clientHeight`, placed at
-   * its offset), re-measured after each growth until nothing scrolls, and
-   * capped at `fullPageMaxHeight`. Under Vitest browser mode the browser
-   * window (the Playwright context viewport) grows with the test iframe,
+   * scroll` box whose `scrollHeight` exceeds its `clientHeight`), and
+   * re-measured after each growth until nothing scrolls. A box that keeps
+   * its height when the viewport grows (a fixed-height code block) stays
+   * scrolled and gives its growth back, and content that grows with the
+   * viewport is not chased. Capped at `fullPageMaxHeight`. Under Vitest
+   * browser mode the browser window (the Playwright context viewport) grows
+   * with the test iframe,
    * or the capture would be scaled down to fit the window; both are put
    * back afterwards. The manifest still reports the pinned `viewport` —
    * that is the baseline key; the picture is simply taller. A capture whose
@@ -49,7 +52,8 @@ export interface QlipCaptureOptions {
   /**
    * The tallest a `fullPage` capture may grow to, in CSS pixels. Chromium
    * refuses viewports past 16384; the default leaves room for very long
-   * pages without inviting a runaway layout.
+   * pages without inviting a runaway layout. A page taller than this is
+   * captured at the cap, with a `[qlip] fullPage:` warning naming the story.
    *
    * @default 10000
    */

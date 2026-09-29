@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { expect, within } from 'storybook/test';
 
-import { TallPage } from './TallPage.js';
+import { FixedBoxPage, TallPage } from './TallPage.js';
 
 const meta = {
   title: 'Example/TallPage',
@@ -47,4 +47,22 @@ export const OneScreen: Story = {
     qlip: { viewport: PHONE },
   },
   play: expectsAnInnerScroller,
+};
+
+/**
+ * `fullPage` on an ordinary page whose only scroller is a fixed-height box:
+ * more viewport never reveals it, so qlip gives the growth back and the
+ * capture stays one screen — not a screen of page over a tall blank strip.
+ * The e2e test reads the PNG's height.
+ */
+export const FixedHeightBox: Story = {
+  render: () => <FixedBoxPage />,
+  parameters: {
+    qlip: { viewport: PHONE, fullPage: true },
+  },
+  play: async ({ canvasElement }) => {
+    const box = canvasElement.querySelector<HTMLElement>('[data-testid="fixed-box"]');
+    if (!box) throw new Error('box not rendered');
+    await expect(box.scrollHeight).toBeGreaterThan(box.clientHeight);
+  },
 };

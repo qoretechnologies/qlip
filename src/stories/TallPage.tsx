@@ -45,3 +45,21 @@ export const TallPage = ({ sections = 12 }: ITallPageProps) => (
     </main>
   </div>
 );
+
+/**
+ * An ordinary page, nothing pinned, whose only scroller is a fixed-height
+ * box (a code block, a capped list). Growing the viewport never grows that
+ * box, so a `fullPage` capture has nothing to reveal and stays one screen.
+ */
+export const FixedBoxPage = () => (
+  <div style={{ padding: 16, fontFamily: 'sans-serif' }}>
+    <h1 style={{ margin: 0 }}>Release notes</h1>
+    <pre
+      data-testid="fixed-box"
+      style={{ height: 200, margin: '16px 0', overflowY: 'auto', border: '1px solid #d1d5db' }}
+    >
+      {Array.from({ length: 100 }, (_, index) => `line ${String(index + 1)}`).join('\n')}
+    </pre>
+    <p style={{ margin: 0 }}>The page ends here.</p>
+  </div>
+);

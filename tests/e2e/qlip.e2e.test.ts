@@ -93,4 +93,10 @@ e2e('captures auto and manual screenshots with manifest entries', async () => {
   expect(grown.width).toBe(390);
   expect(grown.height).toBeGreaterThanOrEqual(56 + 12 * 240);
   expect(grown.height).toBeLessThan(56 + 12 * 240 + 100);
+  // A fixed-height box (a code block) never grows with the viewport, so the
+  // growth it asked for is given back: one screen, not a strip of blank.
+  expect(await pngSize(entryFor('example-tallpage--fixed-height-box').path)).toEqual({
+    width: 390,
+    height: 844,
+  });
 });
