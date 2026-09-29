@@ -10,9 +10,11 @@
  * viewport) stays as configured, and Vitest scales the iframe down to fit it.
  * A 3,600px-tall iframe in a 1,440px window is photographed at 40% — the
  * whole page, unreadable — and so is a plain 844px-tall phone story in a
- * 720px window, at 85%. `createCaptureViewport` therefore grows the window
- * to hold whatever viewport a capture asks for, pinned or grown, and puts
- * both back afterwards, the window first, so the iframe lands at scale 1.
+ * 720px window, at 85%. `createCaptureViewport` therefore grows the window,
+ * when it is given one, to hold whatever viewport a capture asks for, pinned
+ * or grown, and puts both back afterwards, the window first, so the iframe
+ * lands at scale 1. The runtime gives it the window for a `fullPage` capture
+ * and, with `fullSizeCaptures` on, for every capture.
  *
  * This module has no imports: the runtime, the test-runner and the unit
  * project (which has no DOM and feeds it fakes) all share it.

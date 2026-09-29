@@ -7,12 +7,29 @@ export interface QlipCaptureOptions {
   skip?: boolean;
   /**
    * The capture's viewport, and the baseline key on the server. Under
-   * Vitest browser mode a viewport the browser window cannot hold grows the
-   * window for the capture (and puts it back), because Vitest otherwise
-   * scales the test iframe down to fit and the capture comes back smaller
-   * than the viewport it names.
+   * Vitest browser mode a viewport larger than the browser window is
+   * captured scaled down to fit it, unless `fullSizeCaptures` is on.
    */
   viewport?: QlipViewport;
+  /**
+   * Capture at the full size of `viewport`, pixel for pixel. Under Vitest
+   * browser mode the browser window (the Playwright context viewport,
+   * 1280×720 headless unless configured) does not follow `viewport`: Vitest
+   * sizes the test iframe to the viewport and scales the iframe down to fit
+   * the window. The layout is the viewport's, but the pixels are shrunk: a
+   * 1920×1080 story is captured at 1280×720, a 390×844 phone story at
+   * 333×720. With this on, the window grows to hold the viewport for the
+   * capture and is put back afterwards, so the capture is exactly `viewport`.
+   *
+   * Off by default: turning it on changes the size of every capture that was
+   * being scaled, and the server reports each one as changed against its
+   * baseline, so accept them once. A `fullPage` capture grows the window
+   * either way. The Storybook test-runner path sizes the page's own viewport
+   * and always captures at full size.
+   *
+   * @default false
+   */
+  fullSizeCaptures?: boolean;
   disableAnimations?: boolean;
   pauseAnimationsAtEnd?: boolean;
   /**
@@ -39,12 +56,12 @@ export interface QlipCaptureOptions {
    * scrolled and gives its growth back, and content that grows with the
    * viewport is not chased. Capped at `fullPageMaxHeight`. Under Vitest
    * browser mode the browser window (the Playwright context viewport) grows
-   * with the test iframe,
-   * or the capture would be scaled down to fit the window; both are put
-   * back afterwards. The manifest still reports the pinned `viewport` —
-   * that is the baseline key; the picture is simply taller. A capture whose
-   * content height changed shows on the server as a dimensions change
-   * rather than a pixel diff.
+   * with the test iframe whatever `fullSizeCaptures` says, or the capture
+   * would be scaled down to fit the window; both are put back afterwards.
+   * The manifest still reports the pinned `viewport` — that is the baseline
+   * key; the picture is simply taller. A capture whose content height
+   * changed shows on the server as a dimensions change rather than a pixel
+   * diff.
    *
    * @default false
    */

@@ -732,13 +732,18 @@ const captureScreenshot = async ({
   // throws.
   let error: { message: string; stack?: string } | null = testError ?? null;
   let cleanupMasks: (() => void) | null = null;
-  // The browser window grows to hold whatever viewport the capture asks for,
-  // pinned or full-page, or the capture comes back scaled down to fit the
-  // window (see ./fullPage.ts).
+  // Unless the browser window grows with it, a viewport larger than the
+  // window is captured scaled down to fit it (see ./fullPage.ts). Growing it
+  // resizes captures that already have baselines, so it is opt-in
+  // (`fullSizeCaptures`); a `fullPage` capture always grows it, since scaled
+  // it is unreadable.
   const captureViewport = createCaptureViewport({
     pinned: resolved.viewport,
     iframe: (width, height) => page.viewport(width, height),
-    window: (commands as { qlipBrowserViewport?: BrowserViewportCommand }).qlipBrowserViewport,
+    window:
+      resolved.fullSizeCaptures || resolved.fullPage
+        ? (commands as { qlipBrowserViewport?: BrowserViewportCommand }).qlipBrowserViewport
+        : undefined,
   });
   try {
     await captureViewport.set(resolved.viewport.width, resolved.viewport.height);

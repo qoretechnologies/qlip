@@ -41,10 +41,26 @@ export const ScrollsAnInnerBox: Story = {
   play: expectsAnInnerScroller,
 };
 
-/** The same page without `fullPage`: one screen, the rest scrolled away. */
+/**
+ * The same page without `fullPage`: one screen, the rest scrolled away. The
+ * 844px-tall viewport does not fit the 720px headless browser window, so
+ * Vitest scales the story down to fit it and the capture comes back 333×720
+ * — the size such a capture has always had. The e2e test reads it.
+ */
 export const OneScreen: Story = {
   parameters: {
     qlip: { viewport: PHONE },
+  },
+  play: expectsAnInnerScroller,
+};
+
+/**
+ * `OneScreen` with `fullSizeCaptures`: qlip grows the browser window to hold
+ * the viewport, so the capture is exactly 390×844.
+ */
+export const OneScreenFullSize: Story = {
+  parameters: {
+    qlip: { viewport: PHONE, fullSizeCaptures: true },
   },
   play: expectsAnInnerScroller,
 };

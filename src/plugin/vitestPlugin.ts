@@ -50,6 +50,9 @@ export const qlipVitestPlugin = (options: QlipPluginOptions = {}): Plugin => {
         defaults: {
           outputDir,
           viewport: options.viewport ?? DEFAULT_VIEWPORT,
+          // Off by default — turning it on resizes every capture that was
+          // being scaled to fit the window. See QlipCaptureOptions.
+          fullSizeCaptures: options.fullSizeCaptures ?? false,
           skip: false,
           disableAnimations: options.disableAnimations ?? false,
           pauseAnimationsAtEnd: options.pauseAnimationsAtEnd ?? false,
@@ -225,9 +228,10 @@ export const qlipVitestPlugin = (options: QlipPluginOptions = {}): Plugin => {
           setupFiles: [setupFile],
           globalSetup: [globalSetupFile],
           reporters: reportersList,
-          // The runtime grows the browser window for a `fullPage` capture
-          // through this command; it runs here, where the Playwright page
-          // is. `mergeConfig` merges it beside any commands the consumer
+          // The runtime grows the browser window for a `fullPage` capture,
+          // and for every capture with `fullSizeCaptures`, through this
+          // command; it runs here, where the Playwright page is.
+          // `mergeConfig` merges it beside any commands the consumer
           // declares.
           browser: {
             commands: {

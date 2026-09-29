@@ -3,6 +3,7 @@ import { QlipConsoleLevel, QlipParameters, QlipResolvedDefaults, QlipScreenshotO
 export interface QlipResolvedOptions {
   skip: boolean;
   viewport: { width: number; height: number };
+  fullSizeCaptures: boolean;
   disableAnimations: boolean;
   pauseAnimationsAtEnd: boolean;
   disableBackdropFilter: boolean;
@@ -32,6 +33,10 @@ export const resolveQlipOptions = ({
   return {
     skip: override?.skip ?? story?.skip ?? defaults.skip,
     viewport: override?.viewport ?? story?.viewport ?? defaults.viewport,
+    fullSizeCaptures:
+      override?.fullSizeCaptures ??
+      story?.fullSizeCaptures ??
+      defaults.fullSizeCaptures,
     disableAnimations:
       override?.disableAnimations ??
       story?.disableAnimations ??

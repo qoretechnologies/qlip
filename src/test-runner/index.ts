@@ -176,6 +176,9 @@ const buildResolvedDefaults = (
   return {
     outputDir: DEFAULT_OUTPUT_DIR,
     viewport: fallbackViewport,
+    // Not read on this path: `page.setViewportSize` sizes the page itself,
+    // so every capture here is full size already.
+    fullSizeCaptures: override?.fullSizeCaptures ?? false,
     skip: false,
     disableAnimations: override?.disableAnimations ?? false,
     pauseAnimationsAtEnd: override?.pauseAnimationsAtEnd ?? false,

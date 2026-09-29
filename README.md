@@ -194,6 +194,7 @@ export const LoggedIn = {
     qlip: {
       skip: false,
       viewport: { width: 1280, height: 720 },
+      fullSizeCaptures: false,
       disableAnimations: true,
       pauseAnimationsAtEnd: false,
       fullPage: false,
@@ -219,6 +220,7 @@ Options precedence:
 qlipVitestPlugin({
   outputDir: './qlip/screenshots',
   viewport: { width: 1280, height: 720 },
+  fullSizeCaptures: false,
   disableAnimations: false,
   pauseAnimationsAtEnd: false,
   fullPage: false,
@@ -231,7 +233,11 @@ qlipVitestPlugin({
 });
 ```
 
-`fullPage` grows the viewport to the page's full content height for the capture and puts it back afterwards. A story that pins a phone viewport is otherwise photographed one screen tall; a browser "full page" screenshot would not help, because an app shell usually scrolls an inner box rather than the document. qlip measures the document and every scrolling element, grows the viewport by what they hide, and re-measures after each growth until nothing scrolls. Two kinds of box are not chased. A box that keeps its height when the viewport grows (a fixed-height code block, a capped list) stays scrolled, and the growth it asked for is given back, so the capture is not padded with blank space. Content that grows with the viewport (a tile sized to its column, a `vh` hero) would ask for more every round; it stops at the height its real content asked for. The height is capped at `fullPageMaxHeight` (default 10000); a page taller than that is captured at the cap with a `[qlip] fullPage:` warning naming the story. Under Vitest browser mode the test iframe is scaled down to fit the browser window, so the plugin also grows the window — the Playwright context viewport — through a browser command it registers (`qlipBrowserViewport`), and restores it first; the capture is 1:1, not a shrunk picture of a tall page. The same holds for any pinned `viewport` the window cannot hold: an 844px-tall phone story in a 720px window used to come back at 85%, and now grows the window too. The test-runner path grows its Playwright viewport the same way. The manifest keeps reporting the pinned `viewport` — that is the baseline key; the image is simply taller, and a capture whose content height changed shows on the server as a dimensions change rather than a pixel diff.
+`fullPage` grows the viewport to the page's full content height for the capture and puts it back afterwards. A story that pins a phone viewport is otherwise photographed one screen tall; a browser "full page" screenshot would not help, because an app shell usually scrolls an inner box rather than the document. qlip measures the document and every scrolling element, grows the viewport by what they hide, and re-measures after each growth until nothing scrolls. Two kinds of box are not chased. A box that keeps its height when the viewport grows (a fixed-height code block, a capped list) stays scrolled, and the growth it asked for is given back, so the capture is not padded with blank space. Content that grows with the viewport (a tile sized to its column, a `vh` hero) would ask for more every round; it stops at the height its real content asked for. The height is capped at `fullPageMaxHeight` (default 10000); a page taller than that is captured at the cap with a `[qlip] fullPage:` warning naming the story. Under Vitest browser mode the test iframe is scaled down to fit the browser window, so a `fullPage` capture also grows the window — the Playwright context viewport — through a browser command the plugin registers (`qlipBrowserViewport`), and restores it first; the capture is 1:1, not a shrunk picture of a tall page. `fullSizeCaptures` does the same for every capture (below). The test-runner path grows its Playwright viewport the same way. The manifest keeps reporting the pinned `viewport` — that is the baseline key; the image is simply taller, and a capture whose content height changed shows on the server as a dimensions change rather than a pixel diff.
+
+`fullSizeCaptures` captures every story at the full size of its `viewport`. Under Vitest browser mode the browser window stays at the Playwright context viewport — 1280×720 headless, unless you configure it — whatever the story's `viewport` says, and Vitest scales the test iframe down to fit the window. The layout is the story's, but the pixels are shrunk: a 1920×1080 story comes back 1280×720, a 390×844 phone story 333×720, with its text and any fine difference shrunk with it. With `fullSizeCaptures: true` the window grows to hold the viewport for each capture and is put back afterwards, so the PNG is exactly the viewport. The runner path always captures at full size, and `fullPage` always grows the window.
+
+It is off by default, so upgrading qlip changes no baselines, and it will become the default in a future minor release. Turning it on changes the size of every capture whose viewport is larger than the window (stories that fit it are unaffected), and the server reports each of those as changed against its baseline, a dimensions change. Turn it on in one change on your default branch and accept those captures once.
 
 `waitForIdleMs` waits for DOM mutations to settle before taking a screenshot. This is especially useful for animation libraries like `react-spring` that update inline styles via `requestAnimationFrame`, which bypasses CSS-based animation disabling. Increase it if you still catch mid-transition frames, or lower it for faster runs when your UI is static. `maxWaitForIdleMs` caps the wait so stories with continuously changing UI still complete.
 

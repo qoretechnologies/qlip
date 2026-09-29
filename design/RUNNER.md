@@ -343,11 +343,12 @@ each is resolved + delete the question from this list.
    are global. A story could in principle declare a different upload
    target via `parameters.qlip.upload` — declined for v1 because no
    real use case has come up.
-4. **Per-story full-page vs viewport-only.** The Vitest plugin path
-   currently captures viewport-only. Some consumers may want
-   full-page on certain stories (long dashboards). Add
-   `parameters.qlip.fullPage: boolean` in v2 — backend already
-   accepts whatever PNG size we send.
+4. **Per-story full-page vs viewport-only.** Resolved:
+   `parameters.qlip.fullPage` grows the viewport to the content on both
+   paths (see the README). It measures scrolling boxes itself instead of
+   calling `page.screenshot({ fullPage })`, which only sees the document
+   and misses an app shell's inner scroller. The backend accepts
+   whatever PNG size we send.
 5. **`manual` screenshots inside play functions.** test-runner's
    page is exposed via `page.exposeBinding`. We can replicate qlip's
    manual `screenshot(name)` API by exposing `window.__qlip_screenshot`
@@ -412,14 +413,14 @@ Tracked in `qlip/.tasks/STANDALONE_RUNNER.md`:
 
 When you add a new feature to the runner, follow this order:
 
-### Adding a per-story option (e.g. `fullPage`)
+### Adding a per-story option (e.g. `delayBeforeScreenshotMs`)
 
 1. Add field to `QlipCaptureOptions` in `src/types.ts` (already shared
    between Vitest + runner paths).
 2. Resolve in `src/config/parameters.ts` `resolveQlipOptions()` —
    defaults → story → override.
 3. Plumb into `runner/capture.ts`'s `postVisit` body. Use it in the
-   `page.screenshot({ fullPage })` call or in a prep step.
+   `page.screenshot()` call or in a prep step.
 4. If the Vitest path should also honour it, plumb into
    `src/runtime/screenshot.ts` in the same change.
 5. Add the option to the CLI flag list in `runner/cli.ts` (only when

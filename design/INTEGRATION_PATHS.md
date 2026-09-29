@@ -236,6 +236,18 @@ See `RUNNER.md` for architecture, code reuse, and "how to extend."
 This is the architectural point: the **capture path is hot-swappable**.
 Switch by changing the invocation; nothing downstream cares.
 
+<!-- Decision: see PROGRESS.md 2026-09-29 — fullSizeCaptures: full-size Vitest captures are opt-in -->
+One thing differs by default: **capture size**. The runner sizes the
+page's own viewport, so a capture is always exactly its `viewport`. The
+Vitest path sizes the test iframe, and Vitest scales the iframe down to
+fit the browser window (the Playwright context viewport, 1280×720
+headless), so a story whose viewport is larger than the window comes back
+shrunk — a 1920×1080 story at 1280×720. `fullSizeCaptures: true` grows
+the window for each capture; with it on, both paths produce the same PNGs.
+It is off by default until a minor release makes it the default, because
+turning it on changes the size, and so the baseline, of every capture that
+was being scaled.
+
 ---
 
 ## Migration between the two
@@ -253,7 +265,7 @@ Switch by changing the invocation; nothing downstream cares.
 2. Run `yarn test:stories` as your capture path.
 3. (Optional) Remove the `qlipCapture` import from `.storybook/test-runner.ts` — though it doesn't hurt to leave both wired and let CI pick.
 
-There's no data migration: the dashboard build history is the same regardless of which path produced earlier builds.
+There's no data migration: the dashboard build history is the same regardless of which path produced earlier builds. Turn on `fullSizeCaptures` on the Vitest side first, though, in either direction: without it, every story whose viewport is larger than the browser window is captured at a different size on the two paths, and shows as changed after the switch.
 
 ---
 
@@ -292,7 +304,10 @@ Both paths share the same option resolver in
 3. Resolve precedence in `resolveQlipOptions()` (`src/config/parameters.ts`).
 4. Use the resolved value in `src/runtime/screenshot.ts` (Vitest path)
    AND `src/test-runner/index.ts:qlipCapture` (runner path). Symmetry
-   is the point — every option must work in both.
+   is the point — every option must work in both. The one exception is
+   an option that undoes one path's own artifact: `fullSizeCaptures`
+   only acts on the Vitest path, because the runner has no scaled iframe
+   to undo.
 5. Document in this file's "What's identical between the two" table if
    the option is path-agnostic.
 

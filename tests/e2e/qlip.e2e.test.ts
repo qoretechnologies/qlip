@@ -68,10 +68,14 @@ e2e('captures auto and manual screenshots with manifest entries', async () => {
   await fs.access(path.join(buildDir, autoEntry.path));
   await fs.access(path.join(buildDir, manualEntry.path));
 
-  // `fullPage` (Example/TallPage): the column scrolls ~2,900px of sections
-  // behind a phone viewport; the capture is the whole column, at 1:1, while
-  // its sibling without the flag is one screen. The manifest keeps the pinned
-  // viewport as the baseline key for both.
+  // Capture sizes, read from the PNGs. The headless browser window is
+  // 1280×720 and Vitest scales the test iframe down to fit it, so without
+  // `fullSizeCaptures` a larger viewport comes back shrunk — the size such
+  // captures have always had, kept by default so no baseline moves. With it,
+  // the window grows and the capture is exactly the viewport. `fullPage`
+  // (Example/TallPage: the column scrolls ~2,900px of sections behind a phone
+  // viewport) always grows the window, and captures the whole column at 1:1.
+  // The manifest keeps the pinned viewport as the baseline key throughout.
   const pngSize = async (relativePath: string) => {
     const header = await fs.readFile(path.join(buildDir, relativePath));
     return { width: header.readUInt32BE(16), height: header.readUInt32BE(20) };
@@ -86,9 +90,16 @@ e2e('captures auto and manual screenshots with manifest entries', async () => {
   };
   const fullPage = entryFor('example-tallpage--scrolls-an-inner-box');
   const oneScreen = entryFor('example-tallpage--one-screen');
+  const oneScreenFullSize = entryFor('example-tallpage--one-screen-full-size');
+  const desktopFullSize = entryFor('example-page--desktop-full-size');
   expect(fullPage.status).toBe('captured');
   expect(fullPage.viewport).toEqual({ width: 390, height: 844 });
-  expect(await pngSize(oneScreen.path)).toEqual({ width: 390, height: 844 });
+  expect(oneScreen.viewport).toEqual({ width: 390, height: 844 });
+  expect(await pngSize(oneScreen.path)).toEqual({ width: 333, height: 720 });
+  expect(oneScreenFullSize.viewport).toEqual({ width: 390, height: 844 });
+  expect(await pngSize(oneScreenFullSize.path)).toEqual({ width: 390, height: 844 });
+  expect(desktopFullSize.viewport).toEqual({ width: 1920, height: 1080 });
+  expect(await pngSize(desktopFullSize.path)).toEqual({ width: 1920, height: 1080 });
   const grown = await pngSize(fullPage.path);
   expect(grown.width).toBe(390);
   expect(grown.height).toBeGreaterThanOrEqual(56 + 12 * 240);
