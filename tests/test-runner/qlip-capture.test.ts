@@ -50,6 +50,8 @@ interface StubPage {
   $screenshotShouldThrow?: Error;
   /** Stub return for the mask-application evaluate call. */
   $maskIds?: string[];
+  /** Stub answers for the in-page content measure, one per call. */
+  $contentHeights?: number[];
 }
 
 const makeStubPage = (
@@ -70,6 +72,11 @@ const makeStubPage = (
         // so removeIgnoreMasksInPage gets called with them.
         if (fn.toString().includes('mask')) {
           return Promise.resolve((page.$maskIds ?? []) as unknown as R);
+        }
+        if (fn.toString().includes('scrollHeight')) {
+          return Promise.resolve(
+            (page.$contentHeights?.shift() ?? 0) as unknown as R,
+          );
         }
         return Promise.resolve(undefined as unknown as R);
       },
@@ -316,5 +323,52 @@ describe('qlipCapture (process-wide state)', () => {
       ['second--story'],
     ]);
     expect(fragments.map((f) => f.fragmentSeq)).toEqual([1, 2]);
+  });
+});
+
+describe('qlipCapture (fullPage)', () => {
+  it('grows the viewport to the measured content, shoots, and puts it back', async () => {
+    const page = makeStubPage();
+    // Round 1 measures 3589px; the taller page reveals nothing more.
+    page.$contentHeights = [3589, 3589];
+    const getStoryContext = vi.fn(() => Promise.resolve({
+      parameters: {
+        qlip: { viewport: { width: 390, height: 844 }, fullPage: true } as QlipParameters,
+      },
+    }));
+
+    const entry = await qlipCapture(page, { id: 'phone--story' }, { getStoryContext });
+
+    expect(entry?.status).toBe('captured');
+    // The manifest keeps the pinned viewport: that is the baseline key.
+    expect(entry?.viewport).toEqual({ width: 390, height: 844 });
+    expect(page.$viewports).toEqual([
+      { width: 390, height: 844 },
+      { width: 390, height: 3589 },
+      { width: 390, height: 844 },
+    ]);
+    expect(page.$screenshots).toHaveLength(1);
+    // animation control, idle wait, measure, idle wait (settle), measure
+    expect(page.$evaluates.map((e) => e.fnSource.includes('scrollHeight'))).toEqual([
+      false,
+      false,
+      true,
+      false,
+      true,
+    ]);
+  });
+
+  it('leaves the viewport alone when the page already fits', async () => {
+    const page = makeStubPage();
+    page.$contentHeights = [800];
+    const getStoryContext = vi.fn(() => Promise.resolve({
+      parameters: {
+        qlip: { viewport: { width: 390, height: 844 }, fullPage: true } as QlipParameters,
+      },
+    }));
+
+    await qlipCapture(page, { id: 'short--story' }, { getStoryContext });
+
+    expect(page.$viewports).toEqual([{ width: 390, height: 844 }]);
   });
 });

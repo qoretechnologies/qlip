@@ -178,6 +178,8 @@ describe('resolveQlipOptions', () => {
       disableAnimations: false,
       pauseAnimationsAtEnd: false,
       disableBackdropFilter: true,
+      fullPage: false,
+      fullPageMaxHeight: 10000,
       captureOnError: false,
       waitForIdleMs: 300,
       maxWaitForIdleMs: 2000,

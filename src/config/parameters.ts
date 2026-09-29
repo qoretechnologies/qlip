@@ -6,6 +6,8 @@ export interface QlipResolvedOptions {
   disableAnimations: boolean;
   pauseAnimationsAtEnd: boolean;
   disableBackdropFilter: boolean;
+  fullPage: boolean;
+  fullPageMaxHeight: number;
   waitForIdleMs: number;
   maxWaitForIdleMs: number;
   ignoreElements: string[];
@@ -42,6 +44,11 @@ export const resolveQlipOptions = ({
       override?.disableBackdropFilter ??
       story?.disableBackdropFilter ??
       defaults.disableBackdropFilter,
+    fullPage: override?.fullPage ?? story?.fullPage ?? defaults.fullPage,
+    fullPageMaxHeight:
+      override?.fullPageMaxHeight ??
+      story?.fullPageMaxHeight ??
+      defaults.fullPageMaxHeight,
     waitForIdleMs:
       override?.waitForIdleMs ??
       story?.waitForIdleMs ??

@@ -118,3 +118,19 @@ describe('qlipVitestPlugin config hook — no duplicate merge (qlip#17)', () => 
     expect(occurrences(reporters, isQlipReporter)).toBe(1);
   });
 });
+
+describe('qlipVitestPlugin config hook — browser commands', () => {
+  it('registers qlipBrowserViewport beside the consumer\'s own commands', () => {
+    const mine = () => 'mine';
+    const merged = resolveWithPlugin({
+      test: { browser: { enabled: true, commands: { mine } } },
+    });
+    const browser = merged.test?.browser as {
+      enabled: boolean;
+      commands: Record<string, unknown>;
+    };
+    expect(browser.enabled).toBe(true);
+    expect(browser.commands.mine).toBe(mine);
+    expect(typeof browser.commands.qlipBrowserViewport).toBe('function');
+  });
+});

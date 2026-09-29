@@ -196,6 +196,8 @@ export const LoggedIn = {
       viewport: { width: 1280, height: 720 },
       disableAnimations: true,
       pauseAnimationsAtEnd: false,
+      fullPage: false,
+      fullPageMaxHeight: 10000,
       captureOnError: false,
       waitForIdleMs: 300,
       maxWaitForIdleMs: 2000,
@@ -219,6 +221,8 @@ qlipVitestPlugin({
   viewport: { width: 1280, height: 720 },
   disableAnimations: false,
   pauseAnimationsAtEnd: false,
+  fullPage: false,
+  fullPageMaxHeight: 10000,
   captureOnError: false,
   waitForIdleMs: 300,
   maxWaitForIdleMs: 2000,
@@ -226,6 +230,8 @@ qlipVitestPlugin({
   diagnostics: false,
 });
 ```
+
+`fullPage` grows the viewport to the page's full content height for the capture and puts it back afterwards. A story that pins a phone viewport is otherwise photographed one screen tall; a browser "full page" screenshot would not help, because an app shell usually scrolls an inner box rather than the document. qlip measures the document and every scrolling element, grows the viewport, re-measures until nothing scrolls, and caps the height at `fullPageMaxHeight` (default 10000). A page whose content grows with the viewport (a tile sized to its column, a `vh` box) would ask for more every round; a round that asks for no more than the previous growth gave is taken as that, and the capture stays at the height the real content asked for. Under Vitest browser mode the test iframe is scaled down to fit the browser window, so the plugin also grows the window — the Playwright context viewport — through a browser command it registers (`qlipBrowserViewport`), and restores it first; the capture is 1:1, not a shrunk picture of a tall page. The same holds for any pinned `viewport` the window cannot hold: an 844px-tall phone story in a 720px window used to come back at 85%, and now grows the window too. The test-runner path grows its Playwright viewport the same way. The manifest keeps reporting the pinned `viewport` — that is the baseline key; the image is simply taller, and a capture whose content height changed shows on the server as a dimensions change rather than a pixel diff.
 
 `waitForIdleMs` waits for DOM mutations to settle before taking a screenshot. This is especially useful for animation libraries like `react-spring` that update inline styles via `requestAnimationFrame`, which bypasses CSS-based animation disabling. Increase it if you still catch mid-transition frames, or lower it for faster runs when your UI is static. `maxWaitForIdleMs` caps the wait so stories with continuously changing UI still complete.
 

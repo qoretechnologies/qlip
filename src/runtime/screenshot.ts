@@ -7,6 +7,12 @@ import {
 } from '../types.js';
 import { resolveQlipOptions } from '../config/parameters.js';
 import {
+  BrowserViewportCommand,
+  createCaptureViewport,
+  growViewportToContent,
+  measureContentHeight,
+} from './fullPage.js';
+import {
   monotonicNow,
   realClearInterval,
   realSetInterval,
@@ -725,14 +731,31 @@ const captureScreenshot = async ({
   // throws.
   let error: { message: string; stack?: string } | null = testError ?? null;
   let cleanupMasks: (() => void) | null = null;
+  // The browser window grows to hold whatever viewport the capture asks for,
+  // pinned or full-page, or the capture comes back scaled down to fit the
+  // window (see ./fullPage.ts).
+  const captureViewport = createCaptureViewport({
+    pinned: resolved.viewport,
+    iframe: (width, height) => page.viewport(width, height),
+    window: (commands as { qlipBrowserViewport?: BrowserViewportCommand }).qlipBrowserViewport,
+  });
   try {
-    await page.viewport(resolved.viewport.width, resolved.viewport.height);
+    await captureViewport.set(resolved.viewport.width, resolved.viewport.height);
     applyCaptureStyleOverrides({
       disableAnimations: resolved.disableAnimations,
       pauseAnimationsAtEnd: resolved.pauseAnimationsAtEnd,
       disableBackdropFilter: resolved.disableBackdropFilter,
     });
     await waitForDomIdle(resolved.waitForIdleMs, resolved.maxWaitForIdleMs);
+    if (resolved.fullPage) {
+      await growViewportToContent({
+        viewport: resolved.viewport,
+        maxHeight: resolved.fullPageMaxHeight,
+        setViewport: captureViewport.set,
+        measure: () => measureContentHeight(),
+        settle: () => waitForDomIdle(resolved.waitForIdleMs, resolved.maxWaitForIdleMs),
+      });
+    }
     cleanupMasks = applyIgnoreMasks(resolved.ignoreElements);
     await page.screenshot({ path: absolutePath, save: true });
   } catch (err) {
@@ -745,6 +768,14 @@ const captureScreenshot = async ({
   } finally {
     if (cleanupMasks) {
       cleanupMasks();
+    }
+    // The pinned viewport is the baseline key and what the next capture
+    // inherits; a failure to put it back must not hide the capture's own
+    // outcome.
+    try {
+      await captureViewport.restore();
+    } catch {
+      // The suite's own viewport reset runs before the next story.
     }
   }
 

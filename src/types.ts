@@ -5,6 +5,13 @@ export interface QlipViewport {
 
 export interface QlipCaptureOptions {
   skip?: boolean;
+  /**
+   * The capture's viewport, and the baseline key on the server. Under
+   * Vitest browser mode a viewport the browser window cannot hold grows the
+   * window for the capture (and puts it back), because Vitest otherwise
+   * scales the test iframe down to fit and the capture comes back smaller
+   * than the viewport it names.
+   */
   viewport?: QlipViewport;
   disableAnimations?: boolean;
   pauseAnimationsAtEnd?: boolean;
@@ -19,6 +26,34 @@ export interface QlipCaptureOptions {
    * @default true
    */
   disableBackdropFilter?: boolean;
+  /**
+   * Grow the viewport to the page's full content height for the capture,
+   * then put it back. A story that pins a phone viewport is otherwise
+   * photographed one screen tall with the rest of the page scrolled away —
+   * and a Playwright "full page" shot would not help, because an app shell
+   * usually scrolls an inner box, not the document. The height is measured
+   * from the document AND every scrolling element (an `overflow-y: auto |
+   * scroll` box whose `scrollHeight` exceeds its `clientHeight`, placed at
+   * its offset), re-measured after each growth until nothing scrolls, and
+   * capped at `fullPageMaxHeight`. Under Vitest browser mode the browser
+   * window (the Playwright context viewport) grows with the test iframe,
+   * or the capture would be scaled down to fit the window; both are put
+   * back afterwards. The manifest still reports the pinned `viewport` —
+   * that is the baseline key; the picture is simply taller. A capture whose
+   * content height changed shows on the server as a dimensions change
+   * rather than a pixel diff.
+   *
+   * @default false
+   */
+  fullPage?: boolean;
+  /**
+   * The tallest a `fullPage` capture may grow to, in CSS pixels. Chromium
+   * refuses viewports past 16384; the default leaves room for very long
+   * pages without inviting a runaway layout.
+   *
+   * @default 10000
+   */
+  fullPageMaxHeight?: number;
   waitForIdleMs?: number;
   maxWaitForIdleMs?: number;
   ignoreElements?: string[];

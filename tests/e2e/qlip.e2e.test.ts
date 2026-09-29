@@ -67,4 +67,30 @@ e2e('captures auto and manual screenshots with manifest entries', async () => {
 
   await fs.access(path.join(buildDir, autoEntry.path));
   await fs.access(path.join(buildDir, manualEntry.path));
+
+  // `fullPage` (Example/TallPage): the column scrolls ~2,900px of sections
+  // behind a phone viewport; the capture is the whole column, at 1:1, while
+  // its sibling without the flag is one screen. The manifest keeps the pinned
+  // viewport as the baseline key for both.
+  const pngSize = async (relativePath: string) => {
+    const header = await fs.readFile(path.join(buildDir, relativePath));
+    return { width: header.readUInt32BE(16), height: header.readUInt32BE(20) };
+  };
+  const entryFor = (storyId: string) => {
+    const entry = manifest.entries.find(
+      (candidate: { storyId: string; kind: string }) =>
+        candidate.storyId === storyId && candidate.kind === 'auto',
+    );
+    if (!entry) throw new Error(`no auto entry for ${storyId}`);
+    return entry as { path: string; status: string; viewport: { width: number; height: number } };
+  };
+  const fullPage = entryFor('example-tallpage--scrolls-an-inner-box');
+  const oneScreen = entryFor('example-tallpage--one-screen');
+  expect(fullPage.status).toBe('captured');
+  expect(fullPage.viewport).toEqual({ width: 390, height: 844 });
+  expect(await pngSize(oneScreen.path)).toEqual({ width: 390, height: 844 });
+  const grown = await pngSize(fullPage.path);
+  expect(grown.width).toBe(390);
+  expect(grown.height).toBeGreaterThanOrEqual(56 + 12 * 240);
+  expect(grown.height).toBeLessThan(56 + 12 * 240 + 100);
 });
