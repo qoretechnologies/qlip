@@ -204,6 +204,12 @@ const uploadBuildLegacy = async (
   if (options.pullRequestUrl !== undefined) {
     form.append('pullRequestUrl', options.pullRequestUrl);
   }
+  if (options.triggeredByLogin !== undefined) {
+    form.append('triggeredByLogin', options.triggeredByLogin);
+  }
+  if (options.triggeredById !== undefined) {
+    form.append('triggeredById', String(options.triggeredById));
+  }
 
   const response = await fetchImpl(`${baseUrl}/api/builds/upload`, {
     method: 'POST',
@@ -258,6 +264,12 @@ export const uploadBuild = async (
         : {}),
       ...(options.pullRequestUrl !== undefined
         ? { pullRequestUrl: options.pullRequestUrl }
+        : {}),
+      ...(options.triggeredByLogin !== undefined
+        ? { triggeredByLogin: options.triggeredByLogin }
+        : {}),
+      ...(options.triggeredById !== undefined
+        ? { triggeredById: options.triggeredById }
         : {}),
     }),
   });

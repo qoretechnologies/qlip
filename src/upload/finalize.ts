@@ -25,6 +25,7 @@ import {
   autodetectBranch,
   autodetectCommit,
   autodetectPullRequestUrl,
+  autodetectTriggeredBy,
 } from './autodetect.js';
 import {
   buildCaptureReport,
@@ -157,6 +158,18 @@ export const finalizeBuild = async (
     opts.upload.ancestorCommits ?? autodetectAncestorCommits();
   const pullRequestUrl =
     opts.upload.pullRequestUrl ?? autodetectPullRequestUrl();
+  // An explicit login wins outright (with whatever id came with it);
+  // otherwise both come from the CI env together.
+  const detectedTriggeredBy =
+    opts.upload.triggeredByLogin === undefined
+      ? autodetectTriggeredBy()
+      : undefined;
+  const triggeredByLogin =
+    opts.upload.triggeredByLogin ?? detectedTriggeredBy?.login;
+  const triggeredById =
+    opts.upload.triggeredByLogin !== undefined
+      ? opts.upload.triggeredById
+      : detectedTriggeredBy?.id;
 
   const resolved: QlipUploadOptions = {
     ...opts.upload,
@@ -165,6 +178,8 @@ export const finalizeBuild = async (
     ...(baseBranch !== undefined ? { baseBranch } : {}),
     ...(ancestorCommits !== undefined ? { ancestorCommits } : {}),
     ...(pullRequestUrl !== undefined ? { pullRequestUrl } : {}),
+    ...(triggeredByLogin !== undefined ? { triggeredByLogin } : {}),
+    ...(triggeredById !== undefined ? { triggeredById } : {}),
   };
 
   try {

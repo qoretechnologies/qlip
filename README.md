@@ -165,6 +165,15 @@ qlip prints a one-time warning when it detects a shallow clone. It
 never fails the upload over this — accuracy degrades, the run still
 succeeds.
 
+### Who triggered the build
+
+On GitHub Actions qlip also sends the user who triggered the run
+(`$GITHUB_ACTOR`, with `$GITHUB_ACTOR_ID` for a rename-proof avatar), so
+the dashboard shows who pushed each build. Nothing to configure; set
+`upload.triggeredByLogin` (and optionally `upload.triggeredById`) to
+override it, for example from a CI system that isn't GitHub Actions.
+Outside CI the field is simply omitted.
+
 ## Manual screenshots inside play
 
 Use the existing **"Logged In"** story as a real-world example:

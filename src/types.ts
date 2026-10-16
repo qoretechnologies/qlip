@@ -152,6 +152,19 @@ export interface QlipUploadOptions {
    * "View PR" link. See `design/UPLOAD.md`.
    */
   pullRequestUrl?: string;
+  /**
+   * GitHub login of the user who triggered the build — shown as the
+   * build's author in the dashboard. Auto-detected from `$GITHUB_ACTOR`
+   * when omitted. Undefined (not sent) outside GitHub Actions; a
+   * dashboard upload is attributed from the signed-in session instead.
+   */
+  triggeredByLogin?: string;
+  /**
+   * GitHub account id of that user (`$GITHUB_ACTOR_ID`). Stable across
+   * a login rename, so the server prefers it for the avatar. Only sent
+   * alongside `triggeredByLogin`.
+   */
+  triggeredById?: number;
   /** Skip upload entirely (handy for local-only runs). */
   disabled?: boolean;
   /**
