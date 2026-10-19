@@ -21,6 +21,7 @@ import {
   autodetectBranch,
   autodetectCommit,
   autodetectPullRequestUrl,
+  autodetectTriggeredBy,
 } from '../../src/upload/autodetect.js';
 
 // Save + restore env so tests don't pollute each other.
@@ -34,6 +35,8 @@ const savedEnv = {
   GITHUB_SERVER_URL: process.env['GITHUB_SERVER_URL'],
   GITHUB_EVENT_NAME: process.env['GITHUB_EVENT_NAME'],
   GITHUB_EVENT_PATH: process.env['GITHUB_EVENT_PATH'],
+  GITHUB_ACTOR: process.env['GITHUB_ACTOR'],
+  GITHUB_ACTOR_ID: process.env['GITHUB_ACTOR_ID'],
 };
 
 beforeEach(() => {
@@ -46,6 +49,8 @@ beforeEach(() => {
   delete process.env['GITHUB_SERVER_URL'];
   delete process.env['GITHUB_EVENT_NAME'];
   delete process.env['GITHUB_EVENT_PATH'];
+  delete process.env['GITHUB_ACTOR'];
+  delete process.env['GITHUB_ACTOR_ID'];
   execFileSyncMock.mockReset();
 });
 
@@ -202,6 +207,37 @@ describe('autodetectPullRequestUrl', () => {
   it('returns undefined when the repository slug is missing', () => {
     process.env['GITHUB_REF'] = 'refs/pull/123/merge';
     expect(autodetectPullRequestUrl()).toBeUndefined();
+  });
+});
+
+describe('autodetectTriggeredBy', () => {
+  it('reads the login + numeric id from GITHUB_ACTOR / GITHUB_ACTOR_ID', () => {
+    process.env['GITHUB_ACTOR'] = 'octocat';
+    process.env['GITHUB_ACTOR_ID'] = '583231';
+    expect(autodetectTriggeredBy()).toEqual({ login: 'octocat', id: 583231 });
+    // Env-only — never shells out for an identity.
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('returns just the login when the id is unset (older runner)', () => {
+    process.env['GITHUB_ACTOR'] = 'octocat';
+    expect(autodetectTriggeredBy()).toEqual({ login: 'octocat' });
+  });
+
+  it('drops a non-numeric id rather than sending garbage', () => {
+    process.env['GITHUB_ACTOR'] = 'octocat';
+    process.env['GITHUB_ACTOR_ID'] = 'not-a-number';
+    expect(autodetectTriggeredBy()).toEqual({ login: 'octocat' });
+  });
+
+  it('returns undefined outside CI (no GITHUB_ACTOR), even with an id', () => {
+    process.env['GITHUB_ACTOR_ID'] = '583231';
+    expect(autodetectTriggeredBy()).toBeUndefined();
+  });
+
+  it('treats a blank GITHUB_ACTOR as absent', () => {
+    process.env['GITHUB_ACTOR'] = '   ';
+    expect(autodetectTriggeredBy()).toBeUndefined();
   });
 });
 

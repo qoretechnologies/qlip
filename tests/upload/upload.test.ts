@@ -438,6 +438,30 @@ describe('uploadBuild — v2 happy path', () => {
     );
   });
 
+  it('includes triggeredByLogin + triggeredById in the create body when present', async () => {
+    workDir = (await seedBuildDir(manifest())).dir;
+    const { fetchImpl, calls } = scriptedFetch({
+      create: createOk(() => []),
+      finalize: () => finalizeOk(),
+    });
+    await uploadBuild({
+      buildDir: workDir,
+      options: {
+        serverUrl: 'http://localhost:3100',
+        triggeredByLogin: 'octocat',
+        triggeredById: 583231,
+      },
+      fetchImpl,
+    });
+    const createBody = JSON.parse(calls[0].body as string) as {
+      triggeredByLogin: string;
+      triggeredById: number;
+    };
+    expect(createBody.triggeredByLogin).toBe('octocat');
+    // A number on the JSON path (the legacy form stringifies it).
+    expect(createBody.triggeredById).toBe(583231);
+  });
+
   it('omits baseBranch + ancestorCommits + pullRequestUrl from the create body when absent', async () => {
     workDir = (await seedBuildDir(manifest())).dir;
     const { fetchImpl, calls } = scriptedFetch({
@@ -456,6 +480,8 @@ describe('uploadBuild — v2 happy path', () => {
     expect('baseBranch' in createBody).toBe(false);
     expect('ancestorCommits' in createBody).toBe(false);
     expect('pullRequestUrl' in createBody).toBe(false);
+    expect('triggeredByLogin' in createBody).toBe(false);
+    expect('triggeredById' in createBody).toBe(false);
   });
 });
 
@@ -613,6 +639,32 @@ describe('uploadBuild — legacy fallback', () => {
     expect(JSON.parse(raw as string)).toEqual(['aaa111', 'bbb222']);
   });
 
+  it('carries triggeredByLogin + triggeredById on the legacy form as strings', async () => {
+    workDir = (await seedBuildDir(manifest())).dir;
+    let legacyBody: FormData | undefined;
+
+    const { fetchImpl } = scriptedFetch({
+      legacy: (req) => {
+        legacyBody = req.body as FormData;
+        return new Response('{}', { status: 201 });
+      },
+    });
+
+    await uploadBuild({
+      buildDir: workDir,
+      options: {
+        serverUrl: 'http://localhost:3100',
+        triggeredByLogin: 'octocat',
+        triggeredById: 583231,
+      },
+      fetchImpl,
+    });
+
+    expect(legacyBody!.get('triggeredByLogin')).toBe('octocat');
+    // Multipart fields are strings; the server coerces the id back.
+    expect(legacyBody!.get('triggeredById')).toBe('583231');
+  });
+
   it('omits baseBranch + ancestorCommits from the legacy form when absent', async () => {
     workDir = (await seedBuildDir(manifest())).dir;
     let legacyBody: FormData | undefined;
@@ -632,6 +684,8 @@ describe('uploadBuild — legacy fallback', () => {
 
     expect(legacyBody!.has('baseBranch')).toBe(false);
     expect(legacyBody!.has('ancestorCommits')).toBe(false);
+    expect(legacyBody!.has('triggeredByLogin')).toBe(false);
+    expect(legacyBody!.has('triggeredById')).toBe(false);
   });
 });
 

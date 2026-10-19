@@ -61,9 +61,11 @@ qlip uploads via the **content-addressed three-phase protocol**. The
 how it behaves. Client implementation: `src/upload/upload.ts`.
 
 1. **`POST <serverUrl>/api/builds`** — JSON body
-   `{ manifest, project?, branch?, commit?, baseBranch?, ancestorCommits? }`
+   `{ manifest, project?, branch?, commit?, baseBranch?, ancestorCommits?,
+   pullRequestUrl?, triggeredByLogin?, triggeredById? }`
    (`baseBranch` a string, `ancestorCommits` a native JSON array of
-   SHAs ordered nearest-first; both omitted when unavailable). Before
+   SHAs ordered nearest-first, `triggeredById` a number; every
+   metadata field omitted when unavailable). Before
    sending, the client stream-hashes every captured screenshot and writes
    `sha256` + `sizeBytes` onto each captured manifest entry
    (`src/upload/hash.ts`). The server replies
@@ -81,9 +83,11 @@ how it behaves. Client implementation: `src/upload/upload.ts`.
 qlip-server predating the v2 routes), the client transparently falls
 back to the original single multipart `POST /api/builds/upload`
 (manifest file + one `screenshots[<entry.path>]` part per captured
-entry + `project`/`branch`/`commit`/`baseBranch` text fields, with
-`ancestorCommits` appended as a **JSON-encoded string** field — all the
-metadata fields omitted when unavailable). This keeps the
+entry + `project`/`branch`/`commit`/`baseBranch`/`pullRequestUrl`/
+`triggeredByLogin`/`triggeredById` text fields, with `ancestorCommits`
+appended as a **JSON-encoded string** field — all the metadata fields
+omitted when unavailable; `triggeredById` rides as a decimal string
+the server coerces back). This keeps the
 published client working against older self-hosted servers. The
 fallback path is the one that can hit a reverse-proxy `413` on large
 builds — the v2 path can't, since each request carries a single
@@ -293,6 +297,24 @@ unavailable or reports nothing. A **shallow** clone returns a truncated
 ancestry and emits a one-time warning (`git rev-parse
 --is-shallow-repository`); the upload still proceeds. See the
 `fetch-depth: 0` note in `README.md`.
+
+## Detection rules — build author
+
+| Source | triggeredByLogin | triggeredById |
+|---|---|---|
+| Explicit `upload.triggeredByLogin` (+ optional `upload.triggeredById`) | yes | yes |
+| `$GITHUB_ACTOR` + `$GITHUB_ACTOR_ID` (GitHub Actions) | yes | yes |
+
+The author is the GitHub user whose action produced the run — the
+pusher on a `push` / `pull_request` event, the dispatcher on
+`workflow_dispatch`. The id travels with the login because a login can
+be renamed while the account id can't; the server uses it to resolve
+the avatar. Env-only by design: a local git author is an email, not a
+GitHub login, so outside CI both are omitted — and a dashboard upload
+is attributed server-side from the signed-in session. An explicit
+`triggeredByLogin` turns the env detection off entirely (its own
+`triggeredById`, if any, is what's sent). The server stores both as
+nullable and shows the author on the build (`IBuild.triggeredBy`).
 
 ---
 

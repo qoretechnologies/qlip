@@ -131,6 +131,37 @@ export const autodetectPullRequestUrl = (): string | undefined => {
   return `${base}/${repo}/pull/${prNumber}`;
 };
 
+/** The GitHub user whose action produced the build. */
+export interface IUploadTriggeredBy {
+  /** GitHub login (`$GITHUB_ACTOR`). */
+  login: string;
+  /**
+   * GitHub account id (`$GITHUB_ACTOR_ID`). Stable across a rename, so
+   * the server prefers it for the avatar; omitted on an older runner
+   * that doesn't set it.
+   */
+  id?: number;
+}
+
+/**
+ * Who triggered the CI run — the user the dashboard shows as the
+ * build's author. GitHub Actions sets `$GITHUB_ACTOR` (the login) and
+ * `$GITHUB_ACTOR_ID` (the numeric account id) on every run.
+ *
+ * Env-only by design: outside CI there is no GitHub identity to read
+ * (a git author is an email, not a login), and a dashboard upload is
+ * attributed server-side from the signed-in session. Returns undefined
+ * for local runs; the server stores it as nullable, so absence just
+ * means "author unknown". See `qlip-server/design/UPLOAD.md`.
+ */
+export const autodetectTriggeredBy = (): IUploadTriggeredBy | undefined => {
+  const login = process.env['GITHUB_ACTOR']?.trim();
+  if (!login || login.length === 0) return undefined;
+  const rawId = process.env['GITHUB_ACTOR_ID']?.trim();
+  const id = rawId && /^\d+$/.test(rawId) ? Number(rawId) : undefined;
+  return id !== undefined ? { login, id } : { login };
+};
+
 let shallowWarningEmitted = false;
 
 /**
