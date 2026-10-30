@@ -93,6 +93,28 @@ fallback path is the one that can hit a reverse-proxy `413` on large
 builds — the v2 path can't, since each request carries a single
 screenshot.
 
+### Long-running requests
+
+`finalize` (and the legacy `POST /api/builds/upload`) is answered only
+after the server has diffed the whole build. For qorus-ide (~2.1k
+snapshots, 2026-10) that took 470–713 s, measured from the client's
+finalize send to the `build.created` check run on GitHub. Node's global
+`fetch` (undici) fails any request whose response headers take longer
+than 300 s (`headersTimeout`) with `TypeError: fetch failed`
+(`cause.code: UND_ERR_HEADERS_TIMEOUT`), and the limit can't be raised
+without depending on the `undici` package. Every such upload failed at
+~305 s while the server went on to finalize the build.
+
+So these two requests go through `node:http`
+(`src/upload/processing-request.ts`), which has no response deadline of
+its own. The client bounds the wait with `processingTimeoutMs`
+(default 30 min, about 2.5× the slowest measured finalize; CLI
+`--processing-timeout <s>` / `$QLIP_PROCESSING_TIMEOUT`). They are never
+retried: the server keeps processing after the client drops the
+connection, and a second finalize would race the first. A request that
+gets no HTTP response throws `QlipUploadNetworkError` (phase + the full
+`cause` chain); an HTTP error status still throws `QlipUploadError`.
+
 If `uploadToken` is set, every request carries
 `Authorization: Bearer <uploadToken>`. The server fail-closes on
 mismatch when its own `UPLOAD_TOKEN` env var is non-empty.
@@ -259,7 +281,8 @@ On error (`4xx/5xx`), any phase:
 
 `QlipUploadError` carries the failing `phase`
 (`create` | `blob` | `finalize` | `legacy`) and `status` for
-diagnostics. The plugin doesn't act on the response beyond logging the
+diagnostics; `QlipUploadNetworkError` carries the `phase` and `cause`
+of a request that never got a response. The plugin doesn't act on the response beyond logging the
 resulting build ID and how many screenshots actually transferred (the
 rest being deduped server-side) — the dashboard is where users review
 the upload.

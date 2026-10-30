@@ -3,6 +3,8 @@ export { screenshot } from './runtime/screenshot.js';
 export {
   uploadBuild,
   QlipUploadError,
+  QlipUploadNetworkError,
+  DEFAULT_PROCESSING_TIMEOUT_MS,
   type QlipUploadInput,
   type QlipUploadResult,
 } from './upload/upload.js';

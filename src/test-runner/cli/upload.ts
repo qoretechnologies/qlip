@@ -45,6 +45,7 @@ interface IParsedArgs {
   token?: string;
   branch?: string;
   commit?: string;
+  processingTimeout?: string;
   failOnUploadError: boolean;
   failOnPartialBuild: boolean;
   help: boolean;
@@ -68,6 +69,9 @@ Options:
   --token <token>             Bearer token. Default: \$QLIP_UPLOAD_TOKEN.
   --branch <branch>           Override branch detection.
   --commit <sha>              Override commit detection.
+  --processing-timeout <s>    Seconds to wait for the server to process
+                              the build. Default:
+                              \$QLIP_PROCESSING_TIMEOUT or 1800.
   --fail-on-upload-error      Exit non-zero on upload failure (default:
                               log error + exit 0).
   --fail-on-partial-build     Exit non-zero when screenshots on disk are
@@ -111,6 +115,9 @@ const parseArgs = (argv: string[]): IParsedArgs => {
         break;
       case '--commit':
         args.commit = next();
+        break;
+      case '--processing-timeout':
+        args.processingTimeout = next();
         break;
       case '--fail-on-upload-error':
         args.failOnUploadError = true;
@@ -210,6 +217,20 @@ export const runUpload = async (
     return { exitCode: 1 };
   }
 
+  const processingTimeout =
+    parsed.processingTimeout ?? env['QLIP_PROCESSING_TIMEOUT'];
+  let processingTimeoutMs: number | undefined;
+  if (processingTimeout !== undefined && processingTimeout !== '') {
+    const seconds = Number(processingTimeout);
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+      logger.error(
+        `qlip-upload: --processing-timeout must be a positive number of seconds, got "${processingTimeout}"`,
+      );
+      return { exitCode: 1 };
+    }
+    processingTimeoutMs = seconds * 1000;
+  }
+
   const project = parsed.project ?? env['QLIP_PROJECT'] ?? 'default';
   const token = parsed.token ?? env['QLIP_UPLOAD_TOKEN'];
 
@@ -219,6 +240,7 @@ export const runUpload = async (
     ...(token !== undefined && token !== '' ? { uploadToken: token } : {}),
     ...(parsed.branch !== undefined ? { branch: parsed.branch } : {}),
     ...(parsed.commit !== undefined ? { commit: parsed.commit } : {}),
+    ...(processingTimeoutMs !== undefined ? { processingTimeoutMs } : {}),
     failOnUploadError: parsed.failOnUploadError,
     failOnPartialBuild: parsed.failOnPartialBuild,
   };

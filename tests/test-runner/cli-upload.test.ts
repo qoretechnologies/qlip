@@ -23,6 +23,14 @@ import { runUpload } from '../../src/test-runner/cli/upload.js';
 import { MANIFEST_FRAGMENT_DIR } from '../../src/fs/output.js';
 import type { QlipManifest } from '../../src/types.js';
 
+// Finalize goes through node:http, not fetch (see processing-request.ts);
+// route it to the stubbed fetch so these tests never touch the network.
+// The transport itself is covered in tests/upload/processing-request.test.ts.
+vi.mock('../../src/upload/processing-request.js', () => ({
+  fetchAwaitingProcessing: (url: string, init: RequestInit) =>
+    globalThis.fetch(url, init),
+}));
+
 let tmpRoot: string;
 let originalFetch: typeof globalThis.fetch;
 let recordedRequests: Array<{ url: string; method: string; bodyText: string }>;
@@ -33,11 +41,27 @@ let recordedRequests: Array<{ url: string; method: string; bodyText: string }>;
  * blob keys, blob PUTs + finalize succeed.
  */
 let forcedResponse: Response | null;
+/** When set, serves the finalize request instead of the default 201. */
+let finalizeHandler: ((init?: RequestInit) => Promise<Response>) | null;
+
+/** A finalize the server never answers: settles only when the client aborts. */
+const neverAnswered = (init?: RequestInit): Promise<Response> =>
+  new Promise((_resolve, reject) => {
+    const signal = init?.signal;
+    if (!signal) {
+      reject(new Error('finalize was sent without a deadline'));
+      return;
+    }
+    signal.addEventListener('abort', () => {
+      reject(signal.reason);
+    });
+  });
 
 /** Stub fetch so the v2 upload flow is served locally. */
 const installFetch = (): void => {
   recordedRequests = [];
   forcedResponse = null;
+  finalizeHandler = null;
   globalThis.fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url =
       typeof input === 'string'
@@ -78,6 +102,7 @@ const installFetch = (): void => {
     }
     // Phase 3: finalize.
     if (method === 'POST' && pathname.endsWith('/finalize')) {
+      if (finalizeHandler) return finalizeHandler(init);
       return Promise.resolve(
         new Response(JSON.stringify({ build: { id: 'ok' }, snapshots: [] }), {
           status: 201,
@@ -487,5 +512,143 @@ describe('runUpload — partial builds', () => {
     );
 
     expect(result.exitCode).toBe(0);
+  });
+  it('rejects a non-numeric --processing-timeout with exit 1 before uploading', async () => {
+    await seedBuildDir(tmpRoot, '20991231-000000');
+    const error = vi.fn();
+    const result = await runUpload(
+      ['--processing-timeout', 'soon'],
+      { QLIP_UPLOAD_URL: 'http://localhost:3100', QLIP_OUTPUT_DIR: tmpRoot },
+      { log: vi.fn(), error },
+    );
+    expect(result.exitCode).toBe(1);
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining('--processing-timeout must be a positive number'),
+    );
+    expect(recordedRequests).toHaveLength(0);
+  });
+
+  it.each(['0', '-5'])(
+    'rejects --processing-timeout %s with exit 1',
+    async (value) => {
+      await seedBuildDir(tmpRoot, '20991231-000000');
+      const error = vi.fn();
+      const result = await runUpload(
+        ['--processing-timeout', value],
+        { QLIP_UPLOAD_URL: 'http://localhost:3100', QLIP_OUTPUT_DIR: tmpRoot },
+        { log: vi.fn(), error },
+      );
+      expect(result.exitCode).toBe(1);
+      expect(recordedRequests).toHaveLength(0);
+    },
+  );
+
+  it('rejects an invalid $QLIP_PROCESSING_TIMEOUT with exit 1', async () => {
+    await seedBuildDir(tmpRoot, '20991231-000000');
+    const error = vi.fn();
+    const result = await runUpload(
+      [],
+      {
+        QLIP_UPLOAD_URL: 'http://localhost:3100',
+        QLIP_OUTPUT_DIR: tmpRoot,
+        QLIP_PROCESSING_TIMEOUT: 'NaN',
+      },
+      { log: vi.fn(), error },
+    );
+    expect(result.exitCode).toBe(1);
+    expect(recordedRequests).toHaveLength(0);
+  });
+
+  it('exits 2 with --fail-on-upload-error when finalize gets no answer within --processing-timeout', async () => {
+    await seedBuildDir(tmpRoot, '20991231-000000');
+    finalizeHandler = neverAnswered;
+    const error = vi.fn();
+    const result = await runUpload(
+      ['--fail-on-upload-error', '--processing-timeout', '0.05'],
+      { QLIP_UPLOAD_URL: 'http://localhost:3100', QLIP_OUTPUT_DIR: tmpRoot },
+      { log: vi.fn(), error },
+    );
+    expect(result.exitCode).toBe(2);
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'qlip upload failed [finalize]: no response within 0.05 s',
+      ),
+    );
+    expect(
+      recordedRequests.filter((r) => r.url.endsWith('/finalize')),
+    ).toHaveLength(1);
+  });
+
+  it('takes the processing timeout from $QLIP_PROCESSING_TIMEOUT, and a flag overrides it', async () => {
+    await seedBuildDir(tmpRoot, '20991231-000000');
+    finalizeHandler = neverAnswered;
+    const error = vi.fn();
+    const env = {
+      QLIP_UPLOAD_URL: 'http://localhost:3100',
+      QLIP_OUTPUT_DIR: tmpRoot,
+      QLIP_PROCESSING_TIMEOUT: '0.04',
+    };
+    const fromEnv = await runUpload(['--fail-on-upload-error'], env, {
+      log: vi.fn(),
+      error,
+    });
+    expect(fromEnv.exitCode).toBe(2);
+    expect(error).toHaveBeenLastCalledWith(
+      expect.stringContaining('no response within 0.04 s'),
+    );
+
+    resetFinalizeFlag();
+    const fromFlag = await runUpload(
+      ['--fail-on-upload-error', '--processing-timeout', '0.03'],
+      env,
+      { log: vi.fn(), error },
+    );
+    expect(fromFlag.exitCode).toBe(2);
+    expect(error).toHaveBeenLastCalledWith(
+      expect.stringContaining('no response within 0.03 s'),
+    );
+  });
+
+  it('names the phase and the underlying cause when finalize fails at the network level', async () => {
+    await seedBuildDir(tmpRoot, '20991231-000000');
+    finalizeHandler = () =>
+      Promise.reject(
+        new TypeError('fetch failed', {
+          cause: Object.assign(new Error('Headers Timeout Error'), {
+            code: 'UND_ERR_HEADERS_TIMEOUT',
+          }),
+        }),
+      );
+    const error = vi.fn();
+    const result = await runUpload(
+      ['--fail-on-upload-error'],
+      { QLIP_UPLOAD_URL: 'http://localhost:3100', QLIP_OUTPUT_DIR: tmpRoot },
+      { log: vi.fn(), error },
+    );
+    expect(result.exitCode).toBe(2);
+    expect(error).toHaveBeenCalledWith(
+      'qlip-upload: qlip upload failed [finalize]: network error — fetch failed: Headers Timeout Error (UND_ERR_HEADERS_TIMEOUT)',
+    );
+  });
+
+  it('logs the network failure and exits 0 without --fail-on-upload-error', async () => {
+    await seedBuildDir(tmpRoot, '20991231-000000');
+    finalizeHandler = () => Promise.reject(new TypeError('fetch failed'));
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+    try {
+      const result = await runUpload(
+        [],
+        { QLIP_UPLOAD_URL: 'http://localhost:3100', QLIP_OUTPUT_DIR: tmpRoot },
+        { log: vi.fn(), error: vi.fn() },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(consoleError).toHaveBeenCalledWith(
+        '[qlip] upload failed: qlip upload failed [finalize]: network error — fetch failed',
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 });
