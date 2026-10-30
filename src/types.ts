@@ -174,6 +174,12 @@ export interface QlipUploadOptions {
    */
   failOnUploadError?: boolean;
   /**
+   * How long to wait for the server to answer the requests it answers only
+   * after processing the build (finalize, or the legacy upload), in ms.
+   * Default: 30 minutes. See `design/UPLOAD.md` "Long-running requests".
+   */
+  processingTimeoutMs?: number;
+  /**
    * Whether a partial build should fail the run. A build is partial
    * when PNGs exist on disk that no manifest entry references — i.e.
    * captures whose manifest record was lost. Default: `false` (warn

@@ -7,6 +7,8 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { QlipManifest, QlipUploadOptions } from '../types.js';
 import { hashFile } from './hash.js';
+import { fetchAwaitingProcessing } from './processing-request.js';
+import type { TFetchLike } from './processing-request.js';
 
 export interface QlipUploadResult {
   /** Build ID echoed by the server (matches the manifest's buildId). */
@@ -26,8 +28,13 @@ export interface QlipUploadInput {
   buildDir: string;
   /** Resolved upload options (branch/commit already auto-detected). */
   options: QlipUploadOptions;
-  /** Override for tests. Defaults to global fetch. */
-  fetchImpl?: typeof fetch;
+  /**
+   * Override for tests. Defaults to global fetch for create + blobs, and to
+   * a `node:http` transport for the finalize / legacy requests the server
+   * answers only after processing (see `processing-request.ts`). An
+   * override is used for every phase, so its own response timeouts apply.
+   */
+  fetchImpl?: TFetchLike;
   /** Base backoff (ms) between blob-PUT retries; test seam, attempt N waits N×. */
   retryBaseDelayMs?: number;
 }
@@ -39,6 +46,12 @@ const TRANSFER_CONCURRENCY = 10;
 const BLOB_RETRIES = 2;
 const BLOB_TIMEOUT_MS = 30_000;
 const DEFAULT_RETRY_BASE_DELAY_MS = 500;
+/**
+ * Default deadline for the finalize / legacy response. qorus-ide builds of
+ * ~2.1k snapshots measured 470–713 s of server processing (2026-10, see
+ * design/UPLOAD.md "Long-running requests"); 30 min leaves 2.5× headroom.
+ */
+export const DEFAULT_PROCESSING_TIMEOUT_MS = 30 * 60_000;
 
 export type TUploadPhase = 'create' | 'blob' | 'finalize' | 'legacy';
 
@@ -70,6 +83,99 @@ export class QlipUploadError extends Error {
     this.phase = phase;
   }
 }
+
+/**
+ * `fetch failed` alone hides why: the reason (a timeout, a reset, a DNS
+ * failure) lives on the `cause` chain, so the message spells that out.
+ */
+const describeCause = (err: unknown): string => {
+  const parts: string[] = [];
+  const seen = new Set<unknown>();
+  let current: unknown = err;
+  while (current !== undefined && current !== null && !seen.has(current)) {
+    seen.add(current);
+    if (current instanceof Error) {
+      const code = (current as { code?: unknown }).code;
+      parts.push(
+        typeof code === 'string' && code !== ''
+          ? `${current.message} (${code})`
+          : current.message,
+      );
+      current = (current as { cause?: unknown }).cause;
+    } else {
+      parts.push(String(current));
+      break;
+    }
+  }
+  return parts.join(': ');
+};
+
+/**
+ * The request never produced an HTTP response: a network error, or no
+ * response before the client's deadline. `status`-less, unlike
+ * `QlipUploadError`.
+ */
+export class QlipUploadNetworkError extends Error {
+  readonly phase: TUploadPhase;
+  readonly cause: unknown;
+
+  constructor(phase: TUploadPhase, cause: unknown, detail?: string) {
+    super(
+      `qlip upload failed [${phase}]: ${detail ?? `network error — ${describeCause(cause)}`}`,
+    );
+    this.name = 'QlipUploadNetworkError';
+    this.phase = phase;
+    this.cause = cause;
+  }
+}
+
+/** `fetchImpl`, with a transport failure reported as a phase-tagged error. */
+const withPhase =
+  (phase: TUploadPhase, fetchImpl: TFetchLike): TFetchLike =>
+  async (url, init) => {
+    try {
+      return await fetchImpl(url, init);
+    } catch (err) {
+      throw new QlipUploadNetworkError(phase, err);
+    }
+  };
+
+/**
+ * Send a request the server answers only after processing the build. No
+ * retry: the server keeps processing after a dropped connection, and a
+ * second finalize would race the first.
+ */
+const sendAwaitingProcessing = async (
+  phase: TUploadPhase,
+  fetchImpl: TFetchLike,
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> => {
+  const signal = AbortSignal.timeout(timeoutMs);
+  try {
+    return await fetchImpl(url, { ...init, signal });
+  } catch (err) {
+    if (signal.aborted) {
+      throw new QlipUploadNetworkError(
+        phase,
+        err,
+        `no response within ${String(timeoutMs / 1000)} s; the server may still be processing the build — check it in the dashboard, and raise the processing timeout if builds this size take longer`,
+      );
+    }
+    throw new QlipUploadNetworkError(phase, err);
+  }
+};
+
+const resolveProcessingTimeoutMs = (options: QlipUploadOptions): number => {
+  const value = options.processingTimeoutMs ?? DEFAULT_PROCESSING_TIMEOUT_MS;
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new RangeError(
+      `upload.processingTimeoutMs must be a positive number of milliseconds, got ${String(value)}`,
+    );
+  }
+  return value;
+};
 
 /** Contextual hint appended to 413s, tailored to the phase that hit it. */
 const hintFor = (status: number, phase: TUploadPhase): string => {
@@ -131,7 +237,7 @@ const mapWithConcurrency = async <T>(
 
 /** PUT one blob, retrying 5xx/network errors but not deterministic 4xx. */
 const putBlob = async (
-  fetchImpl: typeof fetch,
+  fetchImpl: TFetchLike,
   url: string,
   bytes: Buffer,
   baseHeaders: Record<string, string>,
@@ -161,16 +267,18 @@ const putBlob = async (
     }
     if (attempt < BLOB_RETRIES) await delay(retryBaseDelayMs * (attempt + 1));
   }
-  throw lastError;
+  if (lastError instanceof QlipUploadError) throw lastError;
+  throw new QlipUploadNetworkError('blob', lastError);
 };
 
 /** Pre-v2 single-multipart upload; fallback when the server lacks v2 routes. */
 const uploadBuildLegacy = async (
-  fetchImpl: typeof fetch,
+  fetchImpl: TFetchLike,
   baseUrl: string,
   buildDir: string,
   options: QlipUploadOptions,
   manifest: QlipManifest,
+  processingTimeoutMs: number,
 ): Promise<QlipUploadResult> => {
   const form = new FormData();
   form.append(
@@ -211,11 +319,13 @@ const uploadBuildLegacy = async (
     form.append('triggeredById', String(options.triggeredById));
   }
 
-  const response = await fetchImpl(`${baseUrl}/api/builds/upload`, {
-    method: 'POST',
-    body: form,
-    headers: authHeaders(options),
-  });
+  const response = await sendAwaitingProcessing(
+    'legacy',
+    fetchImpl,
+    `${baseUrl}/api/builds/upload`,
+    { method: 'POST', body: form, headers: authHeaders(options) },
+    processingTimeoutMs,
+  );
   if (!response.ok) throw await errorFromResponse(response, 'legacy');
 
   return { buildId: manifest.buildId, status: response.status, protocol: 'legacy' };
@@ -230,7 +340,10 @@ export const uploadBuild = async (
   input: QlipUploadInput,
 ): Promise<QlipUploadResult> => {
   const { buildDir, options } = input;
-  const fetchImpl = input.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const processingTimeoutMs = resolveProcessingTimeoutMs(options);
+  const fetchImpl: TFetchLike =
+    input.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const processingFetch = input.fetchImpl ?? fetchAwaitingProcessing;
   const retryBaseDelayMs =
     input.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS;
   const baseUrl = resolveServerUrl(options);
@@ -248,7 +361,8 @@ export const uploadBuild = async (
     entry.sizeBytes = sizeBytes;
   });
 
-  const createResponse = await fetchImpl(`${baseUrl}/api/builds`, {
+  const createFetch = withPhase('create', fetchImpl);
+  const createResponse = await createFetch(`${baseUrl}/api/builds`, {
     method: 'POST',
     headers: { ...headers, 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -276,7 +390,14 @@ export const uploadBuild = async (
 
   // 404 ⇒ server predates the v2 routes; fall back to legacy multipart.
   if (createResponse.status === 404) {
-    return uploadBuildLegacy(fetchImpl, baseUrl, buildDir, options, manifest);
+    return uploadBuildLegacy(
+      processingFetch,
+      baseUrl,
+      buildDir,
+      options,
+      manifest,
+      processingTimeoutMs,
+    );
   }
   if (!createResponse.ok) throw await errorFromResponse(createResponse, 'create');
 
@@ -311,9 +432,12 @@ export const uploadBuild = async (
     );
   });
 
-  const finalizeResponse = await fetchImpl(
+  const finalizeResponse = await sendAwaitingProcessing(
+    'finalize',
+    processingFetch,
     `${baseUrl}/api/builds/${buildPath}/finalize`,
     { method: 'POST', headers },
+    processingTimeoutMs,
   );
   if (!finalizeResponse.ok) {
     throw await errorFromResponse(finalizeResponse, 'finalize');

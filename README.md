@@ -317,6 +317,10 @@ Several `vitest run` invocations (or `test-storybook` shards) can capture into o
 
 Add `--fail-on-partial-build` to `qlip-upload` (or `upload.failOnPartialBuild` on the plugin) to turn "screenshots on disk that never reached the manifest" from a warning into a red build.
 
+### Large builds: processing timeout
+
+The server diffs the whole build before it answers the final upload request, which takes minutes for a large Storybook (about 8–12 minutes for ~2,200 snapshots). `qlip-upload` waits up to 30 minutes for that answer; raise it with `--processing-timeout <seconds>` (or `$QLIP_PROCESSING_TIMEOUT`, or `upload.processingTimeoutMs` on the plugin). A timeout or network failure is reported with the failing phase and its cause; add `--fail-on-upload-error` (or `upload.failOnUploadError`) to make it fail the CI step instead of logging it.
+
 ## Manifest
 
 Each run writes `manifest.json` inside the build folder with tool metadata, defaults, stats, and per-screenshot entries (auto + manual).

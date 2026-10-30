@@ -10,7 +10,12 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { QlipUploadError, uploadBuild } from '../../src/upload/upload.js';
+import {
+  DEFAULT_PROCESSING_TIMEOUT_MS,
+  QlipUploadError,
+  QlipUploadNetworkError,
+  uploadBuild,
+} from '../../src/upload/upload.js';
 import type { QlipManifest } from '../../src/types.js';
 
 let workDir: string;
@@ -28,6 +33,7 @@ interface IRecordedRequest {
   method: string;
   headers: Record<string, string>;
   body: unknown;
+  signal: AbortSignal | null | undefined;
 }
 
 /**
@@ -66,6 +72,7 @@ const scriptedFetch = (
       method,
       headers,
       body: init?.body,
+      signal: init?.signal,
     };
     calls.push(recorded);
 
@@ -686,6 +693,237 @@ describe('uploadBuild — legacy fallback', () => {
     expect(legacyBody!.has('ancestorCommits')).toBe(false);
     expect(legacyBody!.has('triggeredByLogin')).toBe(false);
     expect(legacyBody!.has('triggeredById')).toBe(false);
+  });
+});
+
+/** A response the server never sends: settles only when the client aborts. */
+const neverAnswered = (req: IRecordedRequest): Promise<Response> =>
+  new Promise((_resolve, reject) => {
+    const signal = req.signal;
+    if (!signal) {
+      reject(new Error('request was sent without a deadline'));
+      return;
+    }
+    signal.addEventListener('abort', () => {
+      reject(signal.reason);
+    });
+  });
+
+/** What undici's fetch throws when response headers take > 300 s. */
+const headersTimeoutError = (): TypeError =>
+  new TypeError('fetch failed', {
+    cause: Object.assign(new Error('Headers Timeout Error'), {
+      code: 'UND_ERR_HEADERS_TIMEOUT',
+    }),
+  });
+
+describe('uploadBuild — long-running requests', () => {
+  it('sends finalize with a deadline that has not fired yet', async () => {
+    workDir = (await seedBuildDir(manifest())).dir;
+    const { fetchImpl, calls } = scriptedFetch({
+      create: createOk(() => []),
+      finalize: (req) => {
+        expect(req.signal).toBeInstanceOf(AbortSignal);
+        expect(req.signal?.aborted).toBe(false);
+        return finalizeOk();
+      },
+    });
+    const result = await uploadBuild({
+      buildDir: workDir,
+      options: { serverUrl: 'http://localhost:3100' },
+      fetchImpl,
+    });
+    expect(result.status).toBe(201);
+    expect(calls.map((c) => new URL(c.url).pathname)).toEqual([
+      '/api/builds',
+      '/api/builds/test-build-001/finalize',
+    ]);
+  });
+
+  it('defaults the processing timeout to 30 minutes', () => {
+    expect(DEFAULT_PROCESSING_TIMEOUT_MS).toBe(1_800_000);
+  });
+
+  it('fails finalize with a clear network error once processingTimeoutMs passes, without retrying', async () => {
+    workDir = (await seedBuildDir(manifest())).dir;
+    const { fetchImpl, calls } = scriptedFetch({
+      create: createOk(() => []),
+      finalize: neverAnswered,
+    });
+    const upload = uploadBuild({
+      buildDir: workDir,
+      options: { serverUrl: 'http://localhost:3100', processingTimeoutMs: 20 },
+      fetchImpl,
+    });
+    await expect(upload).rejects.toBeInstanceOf(QlipUploadNetworkError);
+    await expect(upload).rejects.toMatchObject({
+      phase: 'finalize',
+      message: expect.stringContaining(
+        'qlip upload failed [finalize]: no response within 0.02 s; the server may still be processing the build',
+      ) as unknown,
+    });
+    // A second finalize would race the one the server is still running.
+    expect(calls.filter((c) => c.url.endsWith('/finalize'))).toHaveLength(1);
+  });
+
+  it('fails the legacy upload the same way once processingTimeoutMs passes', async () => {
+    workDir = (await seedBuildDir(manifest())).dir;
+    const { fetchImpl, calls } = scriptedFetch({ legacy: neverAnswered });
+    await expect(
+      uploadBuild({
+        buildDir: workDir,
+        options: {
+          serverUrl: 'http://localhost:3100',
+          processingTimeoutMs: 20,
+        },
+        fetchImpl,
+      }),
+    ).rejects.toMatchObject({
+      name: 'QlipUploadNetworkError',
+      phase: 'legacy',
+      message: expect.stringContaining('no response within 0.02 s') as unknown,
+    });
+    expect(calls.filter((c) => c.url.endsWith('/upload'))).toHaveLength(1);
+  });
+
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    'rejects processingTimeoutMs %s before sending anything',
+    async (processingTimeoutMs) => {
+      workDir = (await seedBuildDir(manifest())).dir;
+      const { fetchImpl, calls } = scriptedFetch({
+        create: createOk(() => []),
+        finalize: () => finalizeOk(),
+      });
+      await expect(
+        uploadBuild({
+          buildDir: workDir,
+          options: { serverUrl: 'http://localhost:3100', processingTimeoutMs },
+          fetchImpl,
+        }),
+      ).rejects.toThrow(RangeError);
+      expect(calls).toHaveLength(0);
+    },
+  );
+});
+
+describe('uploadBuild — transport failures', () => {
+  it('reports a finalize network failure with its phase and the underlying cause', async () => {
+    workDir = (await seedBuildDir(manifest())).dir;
+    const thrown = headersTimeoutError();
+    const { fetchImpl } = scriptedFetch({
+      create: createOk(() => []),
+      finalize: () => Promise.reject(thrown),
+    });
+    const upload = uploadBuild({
+      buildDir: workDir,
+      options: { serverUrl: 'http://localhost:3100' },
+      fetchImpl,
+    });
+    await expect(upload).rejects.toBeInstanceOf(QlipUploadNetworkError);
+    await expect(upload).rejects.toMatchObject({
+      phase: 'finalize',
+      cause: thrown,
+      message:
+        'qlip upload failed [finalize]: network error — fetch failed: Headers Timeout Error (UND_ERR_HEADERS_TIMEOUT)',
+    });
+  });
+
+  it('reports a create network failure as phase create', async () => {
+    workDir = (await seedBuildDir(manifest())).dir;
+    const { fetchImpl, calls } = scriptedFetch({
+      create: () =>
+        Promise.reject(
+          new TypeError('fetch failed', {
+            cause: Object.assign(new Error('getaddrinfo ENOTFOUND qlip'), {
+              code: 'ENOTFOUND',
+            }),
+          }),
+        ),
+    });
+    await expect(
+      uploadBuild({
+        buildDir: workDir,
+        options: { serverUrl: 'http://localhost:3100' },
+        fetchImpl,
+      }),
+    ).rejects.toMatchObject({
+      name: 'QlipUploadNetworkError',
+      phase: 'create',
+      message:
+        'qlip upload failed [create]: network error — fetch failed: getaddrinfo ENOTFOUND qlip (ENOTFOUND)',
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('reports a blob network failure as phase blob after exhausting its retries', async () => {
+    workDir = (await seedBuildDir(manifest())).dir;
+    let attempts = 0;
+    const { fetchImpl, calls } = scriptedFetch({
+      create: createOk((m) => m.entries.map((e) => e.sha256!)),
+      blob: () => {
+        attempts += 1;
+        return Promise.reject(new TypeError('fetch failed'));
+      },
+      finalize: () => finalizeOk(),
+    });
+    await expect(
+      uploadBuild({
+        buildDir: workDir,
+        options: { serverUrl: 'http://localhost:3100' },
+        fetchImpl,
+        retryBaseDelayMs: 0,
+      }),
+    ).rejects.toMatchObject({
+      name: 'QlipUploadNetworkError',
+      phase: 'blob',
+      message: 'qlip upload failed [blob]: network error — fetch failed',
+    });
+    expect(attempts).toBe(3);
+    expect(calls.some((c) => c.url.endsWith('/finalize'))).toBe(false);
+  });
+
+  it('keeps the HTTP error when a blob 5xx outlasts its retries', async () => {
+    workDir = (await seedBuildDir(manifest())).dir;
+    const { fetchImpl } = scriptedFetch({
+      create: createOk((m) => m.entries.map((e) => e.sha256!)),
+      blob: () => new Response('down', { status: 503, statusText: 'Unavailable' }),
+    });
+    await expect(
+      uploadBuild({
+        buildDir: workDir,
+        options: { serverUrl: 'http://localhost:3100' },
+        fetchImpl,
+        retryBaseDelayMs: 0,
+      }),
+    ).rejects.toMatchObject({
+      name: 'QlipUploadError',
+      phase: 'blob',
+      status: 503,
+    });
+  });
+
+  it('describes a non-Error rejection and stops at a cause cycle', async () => {
+    workDir = (await seedBuildDir(manifest())).dir;
+    const looped = new Error('outer') as Error & { cause?: unknown };
+    looped.cause = looped;
+    const { fetchImpl } = scriptedFetch({
+      create: createOk(() => []),
+      finalize: () =>
+        Promise.reject(new TypeError('fetch failed', { cause: 'socket gone' })),
+    });
+    await expect(
+      uploadBuild({
+        buildDir: workDir,
+        options: { serverUrl: 'http://localhost:3100' },
+        fetchImpl,
+      }),
+    ).rejects.toMatchObject({
+      message:
+        'qlip upload failed [finalize]: network error — fetch failed: socket gone',
+    });
+    expect(new QlipUploadNetworkError('create', looped).message).toBe(
+      'qlip upload failed [create]: network error — outer',
+    );
   });
 });
 
