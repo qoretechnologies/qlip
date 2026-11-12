@@ -14,7 +14,7 @@
  * once.
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mergeConfig } from 'vite';
 import { qlipVitestPlugin } from '../../src/plugin/vitestPlugin.js';
 import type { QlipPluginOptions, QlipRuntimeConfig } from '../../src/types.js';
@@ -150,5 +150,24 @@ describe('qlipVitestPlugin config hook — capture defaults', () => {
   it('leaves fullSizeCaptures off unless the consumer turns it on', () => {
     expect(runtimeDefaults({}).fullSizeCaptures).toBe(false);
     expect(runtimeDefaults({ fullSizeCaptures: true }).fullSizeCaptures).toBe(true);
+  });
+});
+
+describe('qlipVitestPlugin config hook — build createdAt (qlip#33)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('stamps createdAt in Node, at the instant the build id names', () => {
+    const started = new Date(2026, 10, 11, 18, 27, 34);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(started);
+
+    const merged = resolveWithPlugin({}, { buildId: undefined });
+    const define = merged.define as { __QLIP_CONFIG__: string };
+    const runtime = JSON.parse(define.__QLIP_CONFIG__) as QlipRuntimeConfig;
+
+    expect(runtime.buildId).toBe('20261111-182734');
+    expect(runtime.createdAt).toBe(started.toISOString());
   });
 });

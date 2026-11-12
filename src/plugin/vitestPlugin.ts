@@ -26,7 +26,8 @@ const DEFAULT_FULL_PAGE_MAX_HEIGHT = 10000;
 const normalizePath = (value: string) => value.replace(/\\/g, '/');
 
 export const qlipVitestPlugin = (options: QlipPluginOptions = {}): Plugin => {
-  const buildId = options.buildId ?? generateBuildId();
+  const createdAt = new Date();
+  const buildId = options.buildId ?? generateBuildId(createdAt);
   let runtimeConfig: QlipRuntimeConfig | null = null;
   // Plugin instance state — `configureVitest` may fire once per project
   // (vitest's storybook + unit projects both load us); only register
@@ -47,6 +48,7 @@ export const qlipVitestPlugin = (options: QlipPluginOptions = {}): Plugin => {
         buildId,
         outputDir: resolvedOutputDir,
         buildDir,
+        createdAt: createdAt.toISOString(),
         defaults: {
           outputDir,
           viewport: options.viewport ?? DEFAULT_VIEWPORT,

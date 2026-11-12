@@ -254,6 +254,7 @@ export const runUpload = async (
     // The rest are unused by finalizeBuild but the type demands them.
     buildId: path.basename(buildDir),
     outputDir,
+    createdAt: new Date().toISOString(),
     defaults: {} as never,
     tool: { name: 'qlip', version: '0.0.0' },
   };
