@@ -13,8 +13,9 @@ on:
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
   PullRequestTests:
-    # The type of runner that the job will run on
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest is 26.04, which Playwright supports only from 1.62
+    # (this repo locks 1.57).
+    runs-on: ubuntu-24.04
     # Steps represent a sequence of tasks that will be executed as part of the job
     concurrency:
       group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
