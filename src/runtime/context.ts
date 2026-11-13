@@ -75,6 +75,7 @@ export const initRuntimeState = (): QlipRuntimeState | null => {
     outputDir: runtimeConfig.buildDir,
     defaults: runtimeConfig.defaults,
     tool: runtimeConfig.tool,
+    createdAt: new Date(runtimeConfig.createdAt),
   });
 
   // Fragment ID needs to be unique per browser context, not unique per

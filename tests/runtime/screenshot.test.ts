@@ -40,6 +40,7 @@ const runtimeConfig: QlipRuntimeConfig = {
   buildId: 'test-build',
   outputDir: '/tmp/qlip/screenshots',
   buildDir: '/tmp/qlip/screenshots/test-build',
+  createdAt: '2026-01-01T00:00:00.000Z',
   defaults: {
     outputDir: './qlip/screenshots',
     viewport: { width: 200, height: 200 },

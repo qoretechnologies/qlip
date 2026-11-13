@@ -215,6 +215,12 @@ export interface QlipRuntimeConfig {
   buildId: string;
   outputDir: string;
   buildDir: string;
+  /**
+   * The build's creation time (ISO), taken in Node. The page's `Date` can't
+   * give it: a Storybook preview may replace `Date` before qlip's runtime
+   * loads (qlip#33).
+   */
+  createdAt: string;
   defaults: QlipResolvedDefaults;
   tool: { name: string; version: string };
   /** See `QlipPluginOptions.diagnostics`. */
