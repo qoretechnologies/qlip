@@ -123,20 +123,25 @@ bearer. The difference is server-side scope:
 
 | Token | Looks like | Scope | When to use |
 |-------|-----------|-------|-------------|
-| **Per-project** (recommended) | `qlt_…` (44 chars) | Exactly one project; uploads to any other project 403 | CI pipelines. Mint one per project from the dashboard's **Project settings → API tokens**; revoke it without disrupting other projects. |
+| **CI token** (one project; recommended) | `qlt_…` (44 chars) | Exactly one project; uploads to any other project 403 | CI pipelines. Create one per project in the dashboard's **Project settings → CI tokens**; revoke it without disrupting other projects. |
 | **Super-admin** (`UPLOAD_TOKEN`) | whatever you set the env to | Every project, all scopes | Bootstrapping, or a single shared CI that uploads to many projects. The legacy/escape-hatch token; keep it secret. |
 
 Precedence is simple because qlip only sends one token: whatever
 value is in `QLIP_UPLOAD_TOKEN` (or `--token`) is the one used. Pick
-the **narrowest token that works** — a per-project `qlt_…` token for
+the **narrowest token that works** — a CI token (`qlt_…`) for
 a single-project CI, the super-admin token only when one uploader
-genuinely spans projects. A per-project token must match the
-`QLIP_PROJECT` you're uploading to, or the server returns `403`.
+genuinely spans projects.
+
+With a CI token you can leave `QLIP_PROJECT` out: the token picks its
+project. If you set it, it must name that project, or the server
+returns `403`. (A server that predates the v2 upload protocol — qlip
+falls back to the legacy multipart upload for it — does not pick the
+project from the token; there, set `QLIP_PROJECT` to the token's
+project.)
 
 ```bash
-# CI uploading to one project — scoped per-project token:
+# CI uploading to one project — its CI token picks the project:
 QLIP_UPLOAD_URL=https://qlip.example.com \
-QLIP_PROJECT=my-app \
 QLIP_UPLOAD_TOKEN=qlt_xxxxxxxx… \
 yarn test
 ```
